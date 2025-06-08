@@ -18,6 +18,7 @@ if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN) {
 
 // File path for storing subscribers
 const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
+const LAST_CHECK_FILE = path.join(__dirname, 'last_check.json');
 
 // Load subscribers from file or create new Set
 let subscribedUsers = new Set();
@@ -31,6 +32,17 @@ try {
     console.error('Error loading subscribers:', err);
 }
 
+// Load last check time
+let lastScheduledCheck = 0;
+try {
+    if (fs.existsSync(LAST_CHECK_FILE)) {
+        const data = JSON.parse(fs.readFileSync(LAST_CHECK_FILE, 'utf8'));
+        lastScheduledCheck = data.timestamp || 0;
+    }
+} catch (err) {
+    console.error('Error loading last check time:', err);
+}
+
 // Save subscribers to file
 const saveSubscribers = () => {
     try {
@@ -38,6 +50,16 @@ const saveSubscribers = () => {
         console.log(`💾 Saved ${subscribedUsers.size} subscribers to file`);
     } catch (err) {
         console.error('Error saving subscribers:', err);
+    }
+};
+
+// Save last check time
+const saveLastCheckTime = (timestamp) => {
+    try {
+        fs.writeFileSync(LAST_CHECK_FILE, JSON.stringify({ timestamp }));
+        console.log(`⏰ Updated last check time: ${new Date(timestamp).toISOString()}`);
+    } catch (err) {
+        console.error('Error saving last check time:', err);
     }
 };
 
@@ -70,8 +92,18 @@ const scheduleNextCheck = () => {
     console.log(`⏰ Next scheduled check at: ${phNextCheck.toISOString()} (PH Time)`);
 
     setTimeout(() => {
+        const currentTime = Date.now();
+        // Check if this is a duplicate execution
+        if (currentTime - lastScheduledCheck < 4 * 60 * 1000) { // 4 minutes threshold
+            console.log('⏭️ Skipping duplicate scheduled check');
+            scheduleNextCheck();
+            return;
+        }
+
         if (subscribedUsers.size > 0) {
             console.log('🔔 Running scheduled stock check...');
+            lastScheduledCheck = currentTime;
+            saveLastCheckTime(currentTime);
             // Run scheduled check without affecting manual check cooldown
             checkStock(null, true);
         } else {
@@ -87,7 +119,7 @@ scheduleNextCheck();
 
 const sendMessage = async (recipientId, message) => {
     try {
-        await axios.post(
+        const response = await axios.post(
             `https://graph.facebook.com/v17.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
             {
                 messaging_type: 'UPDATE',
@@ -95,9 +127,34 @@ const sendMessage = async (recipientId, message) => {
                 message: { text: message },
             }
         );
-        console.log('Message sent to:', recipientId);
+
+        if (response.status !== 200) {
+            throw new Error(`Unexpected status code: ${response.status}`);
+        }
+
+        console.log('✅ Message sent to:', recipientId);
+        return true;
     } catch (err) {
-        console.error('Failed to send message:', err.response?.data || err.message);
+        console.error('❌ Failed to send message:', err.response?.data || err.message);
+
+        // Handle specific Facebook API errors
+        if (err.response?.data?.error) {
+            const fbError = err.response.data.error;
+            console.error('Facebook API Error:', {
+                code: fbError.code,
+                subcode: fbError.error_subcode,
+                message: fbError.message
+            });
+
+            // Handle rate limiting
+            if (fbError.code === 4 || fbError.code === 17) {
+                console.error('Rate limit exceeded, waiting before retry...');
+                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+                return sendMessage(recipientId, message); // Retry once
+            }
+        }
+
+        return false;
     }
 };
 
@@ -184,13 +241,50 @@ const checkStock = async (senderId, isScheduled = false) => {
             lastCheckTime.set(senderId, Date.now());
         }
 
-        const { data } = await axios.get('https://api.joshlei.com/v2/growagarden/stock');
+        // Add retry logic for API requests
+        let retries = 3;
+        let data;
+
+        while (retries > 0) {
+            try {
+                const response = await axios.get('https://api.joshlei.com/v2/growagarden/stock', {
+                    timeout: 10000, // 10 second timeout
+                    headers: {
+                        'User-Agent': 'RelStocks-Bot/1.0'
+                    }
+                });
+
+                if (response.status !== 200) {
+                    throw new Error(`Unexpected status code: ${response.status}`);
+                }
+
+                data = response.data;
+                break; // Success, exit retry loop
+            } catch (err) {
+                retries--;
+                if (retries === 0) throw err; // No more retries, propagate error
+
+                console.error(`❌ API request failed, retrying... (${retries} attempts left)`);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds before retry
+            }
+        }
+
+        if (!data) {
+            throw new Error('No data received from API');
+        }
+
         let foundItems = [];
 
         for (let category in alerts) {
+            if (!data[category]) {
+                console.warn(`⚠️ Category not found in API response: ${category}`);
+                continue;
+            }
+
             const matches = data[category]?.filter(item =>
-                alerts[category].includes(item.item_id)
+                item && item.item_id && alerts[category].includes(item.item_id)
             );
+
             if (matches?.length) {
                 const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
                 foundItems.push(`*${categoryNames[category]}*\n${itemsList}`);
@@ -201,11 +295,17 @@ const checkStock = async (senderId, isScheduled = false) => {
             const message = `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`;
 
             if (senderId) {
-                await sendMessage(senderId, message);
+                const sent = await sendMessage(senderId, message);
+                if (!sent) {
+                    console.error(`❌ Failed to send message to user ${senderId}`);
+                }
             } else if (isScheduled) {
                 // Only notify subscribers during scheduled checks
                 for (const userId of subscribedUsers) {
-                    await sendMessage(userId, `🔔 *Stock Alert!*\n\n${message}`);
+                    const sent = await sendMessage(userId, `🔔 *Stock Alert!*\n\n${message}`);
+                    if (!sent) {
+                        console.error(`❌ Failed to send alert to subscriber ${userId}`);
+                    }
                 }
             }
         }
@@ -218,9 +318,16 @@ const checkStock = async (senderId, isScheduled = false) => {
             }
         }
     } catch (err) {
-        console.error('❌ Error fetching stock:', err.message);
+        console.error('❌ Error in checkStock:', err.message);
+        if (err.response) {
+            console.error('API Response:', {
+                status: err.response.status,
+                data: err.response.data
+            });
+        }
+
         if (senderId) {
-            await sendMessage(senderId, '❌ Sorry, there was an error checking the stock.');
+            await sendMessage(senderId, '❌ Sorry, there was an error checking the stock. Please try again later.');
         }
     }
 };
