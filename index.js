@@ -17,6 +17,45 @@ if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN) {
 // In-memory subscription list (use a DB in production)
 const subscribedUsers = new Set();
 
+// Function to get next check time
+const getNextCheckTime = () => {
+    const now = new Date();
+    // Convert to UTC+08:00
+    const phTime = new Date(now.getTime() + (8 * 60 * 60 * 1000));
+    const minutes = phTime.getUTCMinutes();
+    const nextCheck = new Date(phTime);
+    // Round up to next 5-minute interval
+    nextCheck.setUTCMinutes(Math.ceil(minutes / 5) * 5);
+    nextCheck.setUTCSeconds(0);
+    nextCheck.setUTCMilliseconds(0);
+    // Convert back to UTC for scheduling
+    return new Date(nextCheck.getTime() - (8 * 60 * 60 * 1000));
+};
+
+// Function to schedule next check
+const scheduleNextCheck = () => {
+    const nextCheck = getNextCheckTime();
+    const delay = nextCheck.getTime() - Date.now();
+
+    // Convert to PH time for display
+    const phNextCheck = new Date(nextCheck.getTime() + (8 * 60 * 60 * 1000));
+    console.log(`⏰ Next stock check scheduled at: ${phNextCheck.toISOString()} (PH Time)`);
+
+    setTimeout(() => {
+        if (subscribedUsers.size > 0) {
+            console.log('🔁 Running scheduled stock check...');
+            checkStock(null);
+        } else {
+            console.log('ℹ️ No subscribers to notify.');
+        }
+        // Schedule the next check
+        scheduleNextCheck();
+    }, delay);
+};
+
+// Start the scheduling
+scheduleNextCheck();
+
 const sendMessage = async (recipientId, message) => {
     try {
         await axios.post(
@@ -133,16 +172,6 @@ const checkStock = async (senderId) => {
         console.error('❌ Error fetching stock:', err.message);
     }
 };
-
-// Auto stock check every 5 minutes
-setInterval(() => {
-    if (subscribedUsers.size > 0) {
-        console.log('🔁 Running scheduled stock check...');
-        checkStock(null);
-    } else {
-        console.log('ℹ️ No subscribers to notify.');
-    }
-}, 5 * 60 * 1000);
 
 // Webhook verification
 app.get('/webhook', (req, res) => {
