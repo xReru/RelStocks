@@ -67,12 +67,13 @@ const scheduleNextCheck = () => {
 
     // Convert to PH time for display
     const phNextCheck = new Date(nextCheck.getTime() + (8 * 60 * 60 * 1000));
-    console.log(`⏰ Next stock check scheduled at: ${phNextCheck.toISOString()} (PH Time)`);
+    console.log(`⏰ Next scheduled check at: ${phNextCheck.toISOString()} (PH Time)`);
 
     setTimeout(() => {
         if (subscribedUsers.size > 0) {
-            console.log('🔁 Running scheduled stock check...');
-            checkStock(null);
+            console.log('🔔 Running scheduled stock check...');
+            // Run scheduled check without affecting manual check cooldown
+            checkStock(null, true);
         } else {
             console.log('ℹ️ No subscribers to notify.');
         }
@@ -166,10 +167,10 @@ const alerts = {
 };
 
 // Stock checking
-const checkStock = async (senderId) => {
+const checkStock = async (senderId, isScheduled = false) => {
     try {
-        // Check cooldown for manual checks
-        if (senderId) {
+        // Check cooldown only for manual checks
+        if (senderId && !isScheduled) {
             const lastCheck = lastCheckTime.get(senderId) || 0;
             const timeSinceLastCheck = Date.now() - lastCheck;
 
@@ -179,7 +180,7 @@ const checkStock = async (senderId) => {
                 return;
             }
 
-            // Update last check time
+            // Update last check time only for manual checks
             lastCheckTime.set(senderId, Date.now());
         }
 
@@ -199,18 +200,23 @@ const checkStock = async (senderId) => {
         if (foundItems.length) {
             const message = `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`;
 
-            // If senderId is provided, send to that specific user
             if (senderId) {
                 await sendMessage(senderId, message);
-            } else {
-                // If no senderId, this is a scheduled check - notify all subscribers
+            } else if (isScheduled) {
+                // Only notify subscribers during scheduled checks
                 for (const userId of subscribedUsers) {
                     await sendMessage(userId, `🔔 *Stock Alert!*\n\n${message}`);
                 }
             }
         }
 
-        if (!foundItems.length) console.log('✅ No matching stock found at this time');
+        if (!foundItems.length) {
+            if (isScheduled) {
+                console.log('✅ No matching stock found in scheduled check');
+            } else {
+                console.log('✅ No matching stock found at this time');
+            }
+        }
     } catch (err) {
         console.error('❌ Error fetching stock:', err.message);
         if (senderId) {
