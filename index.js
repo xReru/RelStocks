@@ -17,6 +17,10 @@ if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN) {
 // In-memory subscription list (use a DB in production)
 const subscribedUsers = new Set();
 
+// Cooldown tracking
+const lastCheckTime = new Map(); // Track last check time per user
+const COOLDOWN_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
+
 // Function to get next check time
 const getNextCheckTime = () => {
     const now = new Date();
@@ -140,6 +144,21 @@ const alerts = {
 // Stock checking
 const checkStock = async (senderId) => {
     try {
+        // Check cooldown for manual checks
+        if (senderId) {
+            const lastCheck = lastCheckTime.get(senderId) || 0;
+            const timeSinceLastCheck = Date.now() - lastCheck;
+
+            if (timeSinceLastCheck < COOLDOWN_TIME) {
+                const remainingTime = Math.ceil((COOLDOWN_TIME - timeSinceLastCheck) / 1000 / 60);
+                await sendMessage(senderId, `⏳ Please wait ${remainingTime} minute(s) before checking again.`);
+                return;
+            }
+
+            // Update last check time
+            lastCheckTime.set(senderId, Date.now());
+        }
+
         const { data } = await axios.get('https://api.joshlei.com/v2/growagarden/stock');
         let foundItems = [];
 
@@ -170,6 +189,9 @@ const checkStock = async (senderId) => {
         if (!foundItems.length) console.log('✅ No matching stock found at this time');
     } catch (err) {
         console.error('❌ Error fetching stock:', err.message);
+        if (senderId) {
+            await sendMessage(senderId, '❌ Sorry, there was an error checking the stock.');
+        }
     }
 };
 
