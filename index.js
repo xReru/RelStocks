@@ -241,6 +241,12 @@ const checkStock = async (senderId, isScheduled = false) => {
             lastCheckTime.set(senderId, Date.now());
         }
 
+        // Add 15-second delay before checking stock
+        if (senderId) {
+            await sendMessage(senderId, "⏳ Please wait 15 seconds while I check the stock...");
+        }
+        await new Promise(resolve => setTimeout(resolve, 10000));
+
         // Add retry logic for API requests
         let retries = 3;
         let data;
