@@ -5,6 +5,9 @@ package-lock.json
 # Environment variables
 .env
 
+# Data files
+subscribers.json
+
 # Logs
 logs
 *.log

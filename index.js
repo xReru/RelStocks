@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -14,8 +16,30 @@ if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN) {
     process.exit(1);
 }
 
-// In-memory subscription list (use a DB in production)
-const subscribedUsers = new Set();
+// File path for storing subscribers
+const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
+
+// Load subscribers from file or create new Set
+let subscribedUsers = new Set();
+try {
+    if (fs.existsSync(SUBSCRIBERS_FILE)) {
+        const data = JSON.parse(fs.readFileSync(SUBSCRIBERS_FILE, 'utf8'));
+        subscribedUsers = new Set(data);
+        console.log(`📋 Loaded ${subscribedUsers.size} subscribers from file`);
+    }
+} catch (err) {
+    console.error('Error loading subscribers:', err);
+}
+
+// Save subscribers to file
+const saveSubscribers = () => {
+    try {
+        fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify([...subscribedUsers]));
+        console.log(`💾 Saved ${subscribedUsers.size} subscribers to file`);
+    } catch (err) {
+        console.error('Error saving subscribers:', err);
+    }
+};
 
 // Cooldown tracking
 const lastCheckTime = new Map(); // Track last check time per user
@@ -235,6 +259,7 @@ app.post('/webhook', (req, res) => {
                             sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
                         } else {
                             subscribedUsers.add(senderId);
+                            saveSubscribers(); // Save after adding new subscriber
                             sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
                         }
                         break;
@@ -242,6 +267,7 @@ app.post('/webhook', (req, res) => {
                     case '/unsubscribe':
                         if (subscribedUsers.has(senderId)) {
                             subscribedUsers.delete(senderId);
+                            saveSubscribers(); // Save after removing subscriber
                             sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
                         } else {
                             sendMessage(senderId, 'ℹ️ You are not currently subscribed to stock alerts.');
