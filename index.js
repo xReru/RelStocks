@@ -194,6 +194,20 @@ app.post('/webhook', (req, res) => {
                 const text = event.message.text.trim().toLowerCase();
 
                 switch (text) {
+                    case '/help':
+                        const helpMessage = `🤖 *Available Commands*\n\n` +
+                            `*Stock Commands*\n` +
+                            `• /stock - View all current stock items\n` +
+                            `• /checkstock - Check for specific alert items\n\n` +
+                            `*Notification Commands*\n` +
+                            `• /subscribe - Get notified when items are in stock\n` +
+                            `• /unsubscribe - Stop receiving notifications\n\n` +
+                            `*Other Commands*\n` +
+                            `• /help - Show this help message\n\n` +
+                            `ℹ️ Stock checks happen every 5 minutes in PH time.`;
+                        sendMessage(senderId, helpMessage);
+                        break;
+
                     case '/subscribe':
                         if (subscribedUsers.has(senderId)) {
                             sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
@@ -223,7 +237,7 @@ app.post('/webhook', (req, res) => {
                         break;
 
                     default:
-                        sendMessage(senderId, "✅ Bot is live.\nCommands:\n/subscribe – Subscribe to stock alerts\n/unsubscribe – Unsubscribe from alerts\n/checkstock – Check alert items\n/stock – Display all current stock");
+                        sendMessage(senderId, "✅ Bot is live! Use /help to see all available commands.");
                 }
             }
         }
