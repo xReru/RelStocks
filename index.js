@@ -46,7 +46,48 @@ const categoryNames = {
     seed_stock: '🌱 Seeds',
     gear_stock: '⚙️ Gear',
     egg_stock: '🥚 Eggs',
+    cosmetic_stock: '🎨 Cosmetics',
     eventshop_stock: '🎉 Event Shop'
+};
+
+// Get all available stock
+const getAllStock = async (senderId) => {
+    try {
+        const { data } = await axios.get('https://api.joshlei.com/v2/growagarden/stock');
+        let stockMessage = [];
+
+        for (let category in data) {
+            // Skip cosmetic_stock category
+            if (category === 'cosmetic_stock') continue;
+
+            // Check if data[category] exists and is an array
+            if (data[category] && Array.isArray(data[category]) && data[category].length > 0) {
+                // Get unique items and sort them
+                const uniqueItems = [...new Set(data[category]
+                    .filter(item => item && item.item_id)
+                    .map(item => item.item_id))].sort();
+
+                if (uniqueItems.length > 0) {
+                    const itemsList = uniqueItems
+                        .map(itemId => `• ${formatItemName(itemId)}`)
+                        .join('\n');
+
+                    const categoryName = categoryNames[category] || category;
+                    stockMessage.push(`${categoryName} (${uniqueItems.length} items)\n${itemsList}`);
+                }
+            }
+        }
+
+        if (stockMessage.length) {
+            const message = `📦 Current Stock Status\n\n${stockMessage.join('\n\n')}`;
+            await sendMessage(senderId, message);
+        } else {
+            await sendMessage(senderId, '❌ No items currently in stock.');
+        }
+    } catch (err) {
+        console.error('❌ Error fetching stock:', err.message);
+        await sendMessage(senderId, '❌ Sorry, there was an error fetching the stock information.');
+    }
 };
 
 // Alerts configuration
@@ -73,12 +114,19 @@ const checkStock = async (senderId) => {
             }
         }
 
-        const message = foundItems.length
-            ? `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`
-            : '✅ No matching stock found right now.';
+        if (foundItems.length) {
+            const message = `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`;
 
-        // Send to the requesting user
-        await sendMessage(senderId, message);
+            // If senderId is provided, send to that specific user
+            if (senderId) {
+                await sendMessage(senderId, message);
+            } else {
+                // If no senderId, this is a scheduled check - notify all subscribers
+                for (const userId of subscribedUsers) {
+                    await sendMessage(userId, `🔔 *Stock Alert!*\n\n${message}`);
+                }
+            }
+        }
 
         if (!foundItems.length) console.log('✅ No matching stock found at this time');
     } catch (err) {
@@ -86,7 +134,7 @@ const checkStock = async (senderId) => {
     }
 };
 
-// Auto stock check every 5 minutes — only if there are subscribers
+// Auto stock check every 5 minutes
 setInterval(() => {
     if (subscribedUsers.size > 0) {
         console.log('🔁 Running scheduled stock check...');
@@ -117,28 +165,36 @@ app.post('/webhook', (req, res) => {
                 const text = event.message.text.trim().toLowerCase();
 
                 switch (text) {
-                    case '/start':
                     case '/subscribe':
-                        subscribedUsers.add(senderId);
-                        sendMessage(senderId, '✅ You are now subscribed to stock alerts.');
-                        break;
-
-                    case '/checkstock':
-                        if (!subscribedUsers.has(senderId)) {
-                            sendMessage(senderId, 'ℹ️ Please subscribe first using /start or /subscribe.');
+                        if (subscribedUsers.has(senderId)) {
+                            sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
                         } else {
-                            sendMessage(senderId, "🔍 Checking stock, please wait...");
-                            checkStock(senderId);
+                            subscribedUsers.add(senderId);
+                            sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
                         }
                         break;
 
                     case '/unsubscribe':
-                        subscribedUsers.delete(senderId);
-                        sendMessage(senderId, '❌ You have been unsubscribed from alerts.');
+                        if (subscribedUsers.has(senderId)) {
+                            subscribedUsers.delete(senderId);
+                            sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
+                        } else {
+                            sendMessage(senderId, 'ℹ️ You are not currently subscribed to stock alerts.');
+                        }
+                        break;
+
+                    case '/checkstock':
+                        sendMessage(senderId, "🔍 Checking stock, please wait...");
+                        checkStock(senderId);
+                        break;
+
+                    case '/stock':
+                        sendMessage(senderId, "🔍 Checking current stock status...");
+                        getAllStock(senderId);
                         break;
 
                     default:
-                        sendMessage(senderId, "✅ Bot is live.\nCommands:\n/start – Subscribe\n/checkstock – Check current stock\n/unsubscribe – Unsubscribe from alerts");
+                        sendMessage(senderId, "✅ Bot is live.\nCommands:\n/subscribe – Subscribe to stock alerts\n/unsubscribe – Unsubscribe from alerts\n/checkstock – Check alert items\n/stock – Display all current stock");
                 }
             }
         }
@@ -151,3 +207,4 @@ app.post('/webhook', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
+checkStock(null);
