@@ -9,8 +9,9 @@ app.use(bodyParser.json());
 
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const ADMIN_ID = process.env.ADMIN_ID;
 const PORT = process.env.PORT || 8080;
-if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN) {
+if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN || !ADMIN_ID) {
     console.error('Error: Missing required environment variables. Please check your .env file.');
     process.exit(1);
 }
@@ -322,9 +323,41 @@ app.post('/webhook', async (req, res) => {
             const senderId = event.sender.id;
 
             if (event.message && event.message.text) {
-                const text = event.message.text.trim().toLowerCase();
+                const text = event.message.text.trim();
 
-                switch (text) {
+                // Handle broadcast command
+                if (text.startsWith('/broadcast ')) {
+                    if (senderId !== ADMIN_ID) {
+                        await sendMessage(senderId, '❌ You are not authorized to use this command.');
+                        continue;
+                    }
+
+                    const message = text.slice('/broadcast '.length);
+                    if (!message) {
+                        await sendMessage(senderId, '❌ Please provide a message to broadcast.');
+                        continue;
+                    }
+
+                    let successCount = 0;
+                    let failCount = 0;
+
+                    for (const userId of subscribedUsers) {
+                        const sent = await sendMessage(userId, `📢 *Broadcast Message*\n\n${message}`);
+                        if (sent) {
+                            successCount++;
+                        } else {
+                            failCount++;
+                        }
+                    }
+
+                    await sendMessage(senderId, `✅ Broadcast complete!\n• Successfully sent: ${successCount}\n• Failed to send: ${failCount}`);
+                    continue;
+                }
+
+                // Convert to lowercase for other commands
+                const textLower = text.toLowerCase();
+
+                switch (textLower) {
                     case '/help':
                         const helpMessage = `🤖 *Available Commands*\n\n` +
                             `*Stock Commands*\n` +
