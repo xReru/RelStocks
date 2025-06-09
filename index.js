@@ -1,8 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
-const fs = require('fs');
-const path = require('path');
+const { initDatabase, getSubscribers, addSubscriber, removeSubscriber } = require('./db');
 require('dotenv').config();
 
 const app = express();
@@ -16,50 +15,16 @@ if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN) {
     process.exit(1);
 }
 
-// File path for storing subscribers
-const SUBSCRIBERS_FILE = path.join(__dirname, 'subscribers.json');
-const LAST_CHECK_FILE = path.join(__dirname, 'last_check.json');
-
-// Load subscribers from file or create new Set
+// Initialize database and load subscribers
 let subscribedUsers = new Set();
-try {
-    if (fs.existsSync(SUBSCRIBERS_FILE)) {
-        const data = JSON.parse(fs.readFileSync(SUBSCRIBERS_FILE, 'utf8'));
-        subscribedUsers = new Set(data);
-        console.log(`📋 Loaded ${subscribedUsers.size} subscribers from file`);
-    }
-} catch (err) {
-    console.error('Error loading subscribers:', err);
-}
-
-// Load last check time
-let lastScheduledCheck = 0;
-try {
-    if (fs.existsSync(LAST_CHECK_FILE)) {
-        const data = JSON.parse(fs.readFileSync(LAST_CHECK_FILE, 'utf8'));
-        lastScheduledCheck = data.timestamp || 0;
-    }
-} catch (err) {
-    console.error('Error loading last check time:', err);
-}
-
-// Save subscribers to file
-const saveSubscribers = () => {
+const initializeApp = async () => {
     try {
-        fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify([...subscribedUsers]));
-        console.log(`💾 Saved ${subscribedUsers.size} subscribers to file`);
+        await initDatabase();
+        subscribedUsers = await getSubscribers();
+        console.log(`📋 Loaded ${subscribedUsers.size} subscribers from database`);
     } catch (err) {
-        console.error('Error saving subscribers:', err);
-    }
-};
-
-// Save last check time
-const saveLastCheckTime = (timestamp) => {
-    try {
-        fs.writeFileSync(LAST_CHECK_FILE, JSON.stringify({ timestamp }));
-        console.log(`⏰ Updated last check time: ${new Date(timestamp).toISOString()}`);
-    } catch (err) {
-        console.error('Error saving last check time:', err);
+        console.error('Error initializing app:', err);
+        process.exit(1);
     }
 };
 
@@ -103,7 +68,6 @@ const scheduleNextCheck = () => {
         if (subscribedUsers.size > 0) {
             console.log('🔔 Running scheduled stock check...');
             lastScheduledCheck = currentTime;
-            saveLastCheckTime(currentTime);
             // Run scheduled check without affecting manual check cooldown
             checkStock(null, true);
         } else {
@@ -216,8 +180,8 @@ const getAllStock = async (senderId) => {
 };
 
 // Alerts configuration
-const alerts = {
-    seed_stock: ['grape', 'mango', 'pepper', 'cacao', 'mushroom', 'bamboo'],
+const defaultAlerts = {
+    seed_stock: ['grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily'],
     gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'lightning_rod'],
     egg_stock: ['bug_egg', 'mythical_egg', 'legendary_egg'],
     eventshop_stock: ['bee_egg', 'honey_sprinkler', 'nectar_staff']
@@ -281,14 +245,14 @@ const checkStock = async (senderId, isScheduled = false) => {
 
         let foundItems = [];
 
-        for (let category in alerts) {
+        for (let category in defaultAlerts) {
             if (!data[category]) {
                 console.warn(`⚠️ Category not found in API response: ${category}`);
                 continue;
             }
 
             const matches = data[category]?.filter(item =>
-                item && item.item_id && alerts[category].includes(item.item_id)
+                item && item.item_id && defaultAlerts[category].includes(item.item_id)
             );
 
             if (matches?.length) {
@@ -348,7 +312,7 @@ app.get('/webhook', (req, res) => {
 });
 
 // Handle incoming messages
-app.post('/webhook', (req, res) => {
+app.post('/webhook', async (req, res) => {
     const entries = req.body.entry;
     for (let entry of entries) {
         const messaging = entry.messaging;
@@ -377,17 +341,25 @@ app.post('/webhook', (req, res) => {
                         if (subscribedUsers.has(senderId)) {
                             sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
                         } else {
-                            subscribedUsers.add(senderId);
-                            saveSubscribers(); // Save after adding new subscriber
-                            sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
+                            const success = await addSubscriber(senderId);
+                            if (success) {
+                                subscribedUsers.add(senderId);
+                                sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
+                            } else {
+                                sendMessage(senderId, '❌ Failed to subscribe. Please try again later.');
+                            }
                         }
                         break;
 
                     case '/unsubscribe':
                         if (subscribedUsers.has(senderId)) {
-                            subscribedUsers.delete(senderId);
-                            saveSubscribers(); // Save after removing subscriber
-                            sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
+                            const success = await removeSubscriber(senderId);
+                            if (success) {
+                                subscribedUsers.delete(senderId);
+                                sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
+                            } else {
+                                sendMessage(senderId, '❌ Failed to unsubscribe. Please try again later.');
+                            }
                         } else {
                             sendMessage(senderId, 'ℹ️ You are not currently subscribed to stock alerts.');
                         }
@@ -414,7 +386,9 @@ app.post('/webhook', (req, res) => {
 });
 
 // Start server
-app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+initializeApp().then(() => {
+    app.listen(PORT, () => {
+        console.log(`Server running on http://localhost:${PORT}`);
+    });
 });
 checkStock(null);
