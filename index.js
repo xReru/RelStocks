@@ -10,11 +10,22 @@ app.use(bodyParser.json());
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const ADMIN_ID = process.env.ADMIN_ID;
+const API_ENDPOINT = process.env.API_ENDPOINT;
 const PORT = process.env.PORT || 8080;
-if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN || !ADMIN_ID) {
+
+if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN || !ADMIN_ID || !API_ENDPOINT) {
     console.error('Error: Missing required environment variables. Please check your .env file.');
     process.exit(1);
 }
+
+// Create axios instance with default config
+const apiClient = axios.create({
+    baseURL: API_ENDPOINT,
+    timeout: 10000,
+    headers: {
+        'User-Agent': 'RelStocks-Bot/1.0'
+    }
+});
 
 // Initialize database and load subscribers
 let subscribedUsers = new Set();
@@ -232,7 +243,7 @@ const categoryNames = {
 // Get all available stock
 const getAllStock = async (senderId) => {
     try {
-        const { data } = await axios.get('https://api.joshlei.com/v2/growagarden/stock');
+        const { data } = await apiClient.get('/v2/growagarden/stock');
         let stockMessage = [];
 
         for (let category in data) {
@@ -307,12 +318,7 @@ const checkStock = async (senderId, isScheduled = false) => {
 
         while (retries > 0) {
             try {
-                const response = await axios.get('https://api.joshlei.com/v2/growagarden/stock', {
-                    timeout: 10000, // 10 second timeout
-                    headers: {
-                        'User-Agent': 'RelStocks-Bot/1.0'
-                    }
-                });
+                const response = await apiClient.get('/v2/growagarden/stock');
 
                 if (response.status !== 200) {
                     throw new Error(`Unexpected status code: ${response.status}`);
