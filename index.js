@@ -17,6 +17,8 @@ if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN) {
 
 // Initialize database and load subscribers
 let subscribedUsers = new Set();
+let lastScheduledCheck = 0;
+
 const initializeApp = async () => {
     try {
         await initDatabase();
