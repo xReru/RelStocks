@@ -31,9 +31,96 @@ const initializeApp = async () => {
     }
 };
 
+// Spam prevention constants
+const GLOBAL_COMMAND_COOLDOWN = 2 * 1000; // 2 seconds between any commands
+const DAILY_COMMAND_LIMIT = 100; // Maximum commands per day per user
+const MESSAGE_RATE_LIMIT = 5; // Maximum messages per minute
+const MESSAGE_RATE_WINDOW = 60 * 1000; // 1 minute window
+
 // Cooldown tracking
 const lastCheckTime = new Map(); // Track last check time per user
 const COOLDOWN_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
+
+// Stock command cooldown tracking
+const stockCommandCooldown = new Map(); // Track last stock command time per user
+const STOCK_COMMAND_COOLDOWN = 10 * 1000; // 10 seconds in milliseconds
+
+// Global command cooldown tracking
+const globalCommandCooldown = new Map(); // Track last command time per user
+
+// Daily command limit tracking
+const dailyCommandCount = new Map(); // Track commands per user per day
+const lastCommandReset = new Map(); // Track when to reset daily counts
+
+// Message rate limiting
+const messageCounts = new Map(); // Track message counts per user
+const messageTimestamps = new Map(); // Track message timestamps per user
+
+// Function to check if user is rate limited
+const isRateLimited = (senderId) => {
+    const now = Date.now();
+
+    // Check global command cooldown
+    const lastCommand = globalCommandCooldown.get(senderId) || 0;
+    if (now - lastCommand < GLOBAL_COMMAND_COOLDOWN) {
+        return {
+            limited: true,
+            message: `⏳ Please wait ${Math.ceil((GLOBAL_COMMAND_COOLDOWN - (now - lastCommand)) / 1000)} second(s) before using another command.`
+        };
+    }
+
+    // Check daily command limit
+    const lastReset = lastCommandReset.get(senderId) || 0;
+    const today = new Date().setHours(0, 0, 0, 0);
+
+    if (lastReset < today) {
+        // Reset daily count if it's a new day
+        dailyCommandCount.set(senderId, 0);
+        lastCommandReset.set(senderId, now);
+    }
+
+    const commandCount = dailyCommandCount.get(senderId) || 0;
+    if (commandCount >= DAILY_COMMAND_LIMIT) {
+        return {
+            limited: true,
+            message: `❌ You have reached your daily command limit of ${DAILY_COMMAND_LIMIT} commands. Please try again tomorrow.`
+        };
+    }
+
+    // Check message rate limit
+    const userMessages = messageCounts.get(senderId) || 0;
+    const userTimestamps = messageTimestamps.get(senderId) || [];
+
+    // Remove timestamps older than the window
+    const recentTimestamps = userTimestamps.filter(timestamp => now - timestamp < MESSAGE_RATE_WINDOW);
+    messageTimestamps.set(senderId, recentTimestamps);
+
+    if (recentTimestamps.length >= MESSAGE_RATE_LIMIT) {
+        return {
+            limited: true,
+            message: `⏳ You are sending messages too quickly. Please wait ${Math.ceil((MESSAGE_RATE_WINDOW - (now - recentTimestamps[0])) / 1000)} second(s).`
+        };
+    }
+
+    return { limited: false };
+};
+
+// Function to update rate limiting counters
+const updateRateLimits = (senderId) => {
+    const now = Date.now();
+
+    // Update global command cooldown
+    globalCommandCooldown.set(senderId, now);
+
+    // Update daily command count
+    const commandCount = dailyCommandCount.get(senderId) || 0;
+    dailyCommandCount.set(senderId, commandCount + 1);
+
+    // Update message rate limiting
+    const timestamps = messageTimestamps.get(senderId) || [];
+    timestamps.push(now);
+    messageTimestamps.set(senderId, timestamps);
+};
 
 // Function to get next check time
 const getNextCheckTime = () => {
@@ -325,6 +412,13 @@ app.post('/webhook', async (req, res) => {
             if (event.message && event.message.text) {
                 const text = event.message.text.trim();
 
+                // Check rate limits first
+                const rateLimitCheck = isRateLimited(senderId);
+                if (rateLimitCheck.limited) {
+                    await sendMessage(senderId, rateLimitCheck.message);
+                    continue;
+                }
+
                 // Handle broadcast command
                 if (text.startsWith('/broadcast ')) {
                     if (senderId !== ADMIN_ID) {
@@ -351,6 +445,7 @@ app.post('/webhook', async (req, res) => {
                     }
 
                     await sendMessage(senderId, `✅ Broadcast complete!\n• Successfully sent: ${successCount}\n• Failed to send: ${failCount}`);
+                    updateRateLimits(senderId);
                     continue;
                 }
 
@@ -369,21 +464,23 @@ app.post('/webhook', async (req, res) => {
                             `*Other Commands*\n` +
                             `• /help - Show this help message\n\n` +
                             `ℹ️ Stock checks happen every 5 minutes in PH time.`;
-                        sendMessage(senderId, helpMessage);
+                        await sendMessage(senderId, helpMessage);
+                        updateRateLimits(senderId);
                         break;
 
                     case '/subscribe':
                         if (subscribedUsers.has(senderId)) {
-                            sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
+                            await sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
                         } else {
                             const success = await addSubscriber(senderId);
                             if (success) {
                                 subscribedUsers.add(senderId);
-                                sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
+                                await sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
                             } else {
-                                sendMessage(senderId, '❌ Failed to subscribe. Please try again later.');
+                                await sendMessage(senderId, '❌ Failed to subscribe. Please try again later.');
                             }
                         }
+                        updateRateLimits(senderId);
                         break;
 
                     case '/unsubscribe':
@@ -391,27 +488,55 @@ app.post('/webhook', async (req, res) => {
                             const success = await removeSubscriber(senderId);
                             if (success) {
                                 subscribedUsers.delete(senderId);
-                                sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
+                                await sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
                             } else {
-                                sendMessage(senderId, '❌ Failed to unsubscribe. Please try again later.');
+                                await sendMessage(senderId, '❌ Failed to unsubscribe. Please try again later.');
                             }
                         } else {
-                            sendMessage(senderId, 'ℹ️ You are not currently subscribed to stock alerts.');
+                            await sendMessage(senderId, 'ℹ️ You are not currently subscribed to stock alerts.');
                         }
+                        updateRateLimits(senderId);
                         break;
 
                     case '/checkstock':
-                        sendMessage(senderId, "🔍 Checking stock, please wait...");
-                        checkStock(senderId);
+                        // Check stock command cooldown
+                        const lastStockCheck = stockCommandCooldown.get(senderId) || 0;
+                        const timeSinceLastStockCheck = Date.now() - lastStockCheck;
+
+                        if (timeSinceLastStockCheck < STOCK_COMMAND_COOLDOWN) {
+                            const remainingTime = Math.ceil((STOCK_COMMAND_COOLDOWN - timeSinceLastStockCheck) / 1000);
+                            await sendMessage(senderId, `⏳ Please wait ${remainingTime} second(s) before checking stock again.`);
+                            continue;
+                        }
+
+                        // Update last stock check time
+                        stockCommandCooldown.set(senderId, Date.now());
+                        await sendMessage(senderId, "🔍 Checking stock, please wait...");
+                        await checkStock(senderId);
+                        updateRateLimits(senderId);
                         break;
 
                     case '/stock':
-                        sendMessage(senderId, "🔍 Checking current stock status...");
-                        getAllStock(senderId);
+                        // Check stock command cooldown
+                        const lastStockView = stockCommandCooldown.get(senderId) || 0;
+                        const timeSinceLastStockView = Date.now() - lastStockView;
+
+                        if (timeSinceLastStockView < STOCK_COMMAND_COOLDOWN) {
+                            const remainingTime = Math.ceil((STOCK_COMMAND_COOLDOWN - timeSinceLastStockView) / 1000);
+                            await sendMessage(senderId, `⏳ Please wait ${remainingTime} second(s) before checking stock again.`);
+                            continue;
+                        }
+
+                        // Update last stock check time
+                        stockCommandCooldown.set(senderId, Date.now());
+                        await sendMessage(senderId, "🔍 Checking current stock status...");
+                        await getAllStock(senderId);
+                        updateRateLimits(senderId);
                         break;
 
                     default:
-                        sendMessage(senderId, "✅ Bot is live! Use /help to see all available commands.");
+                        await sendMessage(senderId, "✅ Bot is live! Use /help to see all available commands.");
+                        updateRateLimits(senderId);
                 }
             }
         }
