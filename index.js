@@ -67,6 +67,11 @@ const lastCommandReset = new Map(); // Track when to reset daily counts
 const messageCounts = new Map(); // Track message counts per user
 const messageTimestamps = new Map(); // Track message timestamps per user
 
+// Track last seen items for 30-min restock categories
+const lastSeenStock = new Map();
+// Track last check time for 30-min categories
+const lastCheckTime30Min = new Map();
+
 // Function to check if user is rate limited
 const isRateLimited = (senderId) => {
     const now = Date.now();
@@ -306,11 +311,11 @@ const checkStock = async (senderId, isScheduled = false) => {
             lastCheckTime.set(senderId, Date.now());
         }
 
-        // Add 15-second delay before checking stock
+        // Add initial delay before checking stock
         if (senderId) {
-            await sendMessage(senderId, "⏳ Please wait 15 seconds while I check the stock...");
+            await sendMessage(senderId, "⏳ Please wait while I check the stock...");
         }
-        await new Promise(resolve => setTimeout(resolve, 10000));
+        await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second initial delay
 
         // Add retry logic for API requests
         let retries = 3;
@@ -340,8 +345,10 @@ const checkStock = async (senderId, isScheduled = false) => {
         }
 
         let foundItems = [];
+        let hasNewSeedOrGear = false;
 
-        for (let category in defaultAlerts) {
+        // First check seed and gear stock
+        for (let category of ['seed_stock', 'gear_stock']) {
             if (!data[category]) {
                 console.warn(`⚠️ Category not found in API response: ${category}`);
                 continue;
@@ -354,6 +361,52 @@ const checkStock = async (senderId, isScheduled = false) => {
             if (matches?.length) {
                 const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
                 foundItems.push(`*${categoryNames[category]}*\n${itemsList}`);
+                hasNewSeedOrGear = true;
+            }
+        }
+
+        // Add delay before checking 30-min restock items
+        if (isScheduled) {
+            await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second delay for 30-min items
+        }
+
+        // Then check egg and eventshop stock
+        for (let category of ['egg_stock', 'eventshop_stock']) {
+            if (!data[category]) {
+                console.warn(`⚠️ Category not found in API response: ${category}`);
+                continue;
+            }
+
+            const matches = data[category]?.filter(item =>
+                item && item.item_id && defaultAlerts[category].includes(item.item_id)
+            );
+
+            if (matches?.length) {
+                const currentItems = new Set(matches.map(i => i.item_id));
+                const lastSeen = lastSeenStock.get(category) || new Set();
+                const lastCheck = lastCheckTime30Min.get(category) || 0;
+                const now = Date.now();
+
+                // Check if it's been 30 minutes since last check
+                const is30MinInterval = (now - lastCheck) >= 30 * 60 * 1000;
+
+                // Check if there are any new items
+                const hasNewItems = [...currentItems].some(item => !lastSeen.has(item));
+
+                // Only include if:
+                // 1. There are new seed/gear items, OR
+                // 2. It's a new 30-min restock (has new items and 30 mins passed)
+                if (hasNewItems || hasNewSeedOrGear) {
+                    const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
+                    foundItems.push(`*${categoryNames[category]}*\n${itemsList}`);
+
+                    if (is30MinInterval) {
+                        lastCheckTime30Min.set(category, now);
+                    }
+                }
+
+                // Always update last seen items
+                lastSeenStock.set(category, currentItems);
             }
         }
 
@@ -374,11 +427,9 @@ const checkStock = async (senderId, isScheduled = false) => {
                     }
                 }
             }
-        }
-
-        if (!foundItems.length) {
+        } else {
             if (isScheduled) {
-                console.log('✅ No matching stock found in scheduled check');
+                console.log('✅ No new stock to alert at this time');
             } else {
                 console.log('✅ No matching stock found at this time');
             }
