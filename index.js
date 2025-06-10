@@ -594,12 +594,12 @@ app.post('/webhook', async (req, res) => {
                         break;
                     case '/about':
                         const aboutMessage = `🤖 About the Bot\n\n` +
-                            `• This bot is developed by Janrell Quiaroro(Rel).\n` +
-                            `• It checks the stock of the game Grow a Garden (Roblox) every 5 minutes and sends notifications to users when new items are in stock.\n` +
-                            `• Rel created this bot for his own use, but decided to share it with the community.\n` +
-                            `• The services of this bot is free, and all the resources used to create this bot are from the internet.\n` +
-                            `• Please DO NOT abuse the services of this bot, and keep the commands to a minimum as the server used is also limited.\n` +
-                            `• If you have any suggestions, please contact Rel on discord (@reruu).\n`;
+                            `• This bot is developed by Janrell Quiaroro(Rel).\n\n` +
+                            `• It checks the stock of the game Grow a Garden (Roblox) every 5 minutes and sends notifications to users when new items are in stock.\n\n` +
+                            `• Rel created this bot for his own use, but decided to share it with the community.\n\n` +
+                            `• The services of this bot is free, and all the resources used to create this bot are from the internet.\n\n` +
+                            `• Please DO NOT abuse the services of this bot, and keep the commands to a minimum as the server used is also limited.\n\n` +
+                            `• If you have any suggestions, please contact Rel on discord (@reruu).\n\n`;
                         await sendMessage(senderId, aboutMessage);
                         updateRateLimits(senderId);
                         break;
