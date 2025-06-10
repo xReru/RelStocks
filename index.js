@@ -442,7 +442,7 @@ app.post('/webhook', async (req, res) => {
                     let failCount = 0;
 
                     for (const userId of subscribedUsers) {
-                        const sent = await sendMessage(userId, `📢 *Broadcast Message*\n\n${message}`);
+                        const sent = await sendMessage(userId, `📢 Broadcast Message\n\n${message}`);
                         if (sent) {
                             successCount++;
                         } else {
