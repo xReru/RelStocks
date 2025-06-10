@@ -287,8 +287,8 @@ const getAllStock = async (senderId) => {
 
 // Alerts configuration
 const defaultAlerts = {
-    seed_stock: ['grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily'],
-    gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'lightning_rod'],
+    seed_stock: ['grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily', 'coconut'],
+    gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'lightning_rod', 'friendship_pot'],
     egg_stock: ['bug_egg', 'mythical_egg', 'legendary_egg'],
     eventshop_stock: ['bee_egg', 'honey_sprinkler', 'nectar_staff']
 };
@@ -360,7 +360,7 @@ const checkStock = async (senderId, isScheduled = false) => {
 
             if (matches?.length) {
                 const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
-                foundItems.push(`*${categoryNames[category]}*\n${itemsList}`);
+                foundItems.push(`${categoryNames[category]}\n${itemsList}`);
                 hasNewSeedOrGear = true;
             }
         }
@@ -398,7 +398,7 @@ const checkStock = async (senderId, isScheduled = false) => {
                 // 2. It's a new 30-min restock (has new items and 30 mins passed)
                 if (hasNewItems || hasNewSeedOrGear) {
                     const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
-                    foundItems.push(`*${categoryNames[category]}*\n${itemsList}`);
+                    foundItems.push(`${categoryNames[category]}\n${itemsList}`);
 
                     if (is30MinInterval) {
                         lastCheckTime30Min.set(category, now);
@@ -421,7 +421,7 @@ const checkStock = async (senderId, isScheduled = false) => {
             } else if (isScheduled) {
                 // Only notify subscribers during scheduled checks
                 for (const userId of subscribedUsers) {
-                    const sent = await sendMessage(userId, `🔔 *Stock Alert!*\n\n${message}`);
+                    const sent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
                     if (!sent) {
                         console.error(`❌ Failed to send alert to subscriber ${userId}`);
                     }
@@ -511,15 +511,16 @@ app.post('/webhook', async (req, res) => {
 
                 switch (textLower) {
                     case '/help':
-                        const helpMessage = `🤖 *Available Commands*\n\n` +
-                            `*Stock Commands*\n` +
+                        const helpMessage = `🤖 Available Commands\n\n` +
+                            `Stock Commands\n` +
                             `• /stock - View all current stock items\n` +
-                            `• /checkstock - Check for specific alert items\n\n` +
-                            `*Notification Commands*\n` +
+                            `• /checkstock - Check for stock of the default alerts\n` +
+                            `• /defaultalerts - Show items that trigger stock alerts\n\n` +
+                            `Notification Commands\n` +
                             `• /subscribe - Get notified when items are in stock\n` +
                             `• /unsubscribe - Stop receiving notifications\n\n` +
-                            `*Other Commands*\n` +
-                            `• /about - little about the dev and the bot\n\n` +
+                            `Other Commands\n` +
+                            `• /about - Little about the bot and the dev\n\n` +
                             `• /help - Show this help message\n\n` +
                             `ℹ️ Stock checks happen every 5 minutes in PH time.`;
                         await sendMessage(senderId, helpMessage);
@@ -592,7 +593,7 @@ app.post('/webhook', async (req, res) => {
                         updateRateLimits(senderId);
                         break;
                     case '/about':
-                        const aboutMessage = `🤖 *About the Bot*\n\n` +
+                        const aboutMessage = `🤖 About the Bot\n\n` +
                             `• This bot is developed by Janrell Quiaroro(Rel).\n` +
                             `• It checks the stock of the game Grow a Garden (Roblox) every 5 minutes and sends notifications to users when new items are in stock.\n` +
                             `• Rel created this bot for his own use, but decided to share it with the community.\n` +
@@ -602,6 +603,21 @@ app.post('/webhook', async (req, res) => {
                         await sendMessage(senderId, aboutMessage);
                         updateRateLimits(senderId);
                         break;
+
+                    case '/defaultalerts':
+                        let alertsMessage = `🔔 Default Stock Alerts\n\n`;
+
+                        for (const [category, items] of Object.entries(defaultAlerts)) {
+                            const categoryName = categoryNames[category] || category;
+                            const formattedItems = items.map(item => `• ${formatItemName(item)}`).join('\n');
+                            alertsMessage += `${categoryName}\n${formattedItems}\n\n`;
+                        }
+
+                        alertsMessage += `ℹ️ These are the items that will trigger notifications when they are in stock.`;
+                        await sendMessage(senderId, alertsMessage);
+                        updateRateLimits(senderId);
+                        break;
+
                     default:
                         await sendMessage(senderId, "✅ Bot is live! Use /help to see all available commands.");
                         updateRateLimits(senderId);
