@@ -420,10 +420,29 @@ const checkStock = async (senderId, isScheduled = false) => {
                 }
             } else if (isScheduled) {
                 // Only notify subscribers during scheduled checks
+                const failedSubscribers = new Set();
+
+                // First attempt to send to all subscribers
                 for (const userId of subscribedUsers) {
                     const sent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
                     if (!sent) {
-                        console.error(`❌ Failed to send alert to subscriber ${userId}`);
+                        console.error(`❌ Failed to send alert to subscriber ${userId}, will retry`);
+                        failedSubscribers.add(userId);
+                    }
+                }
+
+                // If there are failed subscribers, wait 5 seconds and retry once
+                if (failedSubscribers.size > 0) {
+                    console.log(`🔄 Retrying failed notifications for ${failedSubscribers.size} subscribers...`);
+                    await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
+
+                    for (const userId of failedSubscribers) {
+                        const retrySent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
+                        if (!retrySent) {
+                            console.error(`❌ Failed to send alert to subscriber ${userId} after retry`);
+                        } else {
+                            console.log(`✅ Successfully sent alert to subscriber ${userId} after retry`);
+                        }
                     }
                 }
             }
@@ -491,13 +510,34 @@ app.post('/webhook', async (req, res) => {
 
                     let successCount = 0;
                     let failCount = 0;
+                    const failedSubscribers = new Set();
 
+                    // First attempt to send to all subscribers
                     for (const userId of subscribedUsers) {
                         const sent = await sendMessage(userId, `📢 Broadcast Message\n\n${message}`);
                         if (sent) {
                             successCount++;
                         } else {
+                            console.error(`❌ Failed to send broadcast to subscriber ${userId}, will retry`);
+                            failedSubscribers.add(userId);
                             failCount++;
+                        }
+                    }
+
+                    // If there are failed subscribers, wait 5 seconds and retry once
+                    if (failedSubscribers.size > 0) {
+                        console.log(`🔄 Retrying failed broadcasts for ${failedSubscribers.size} subscribers...`);
+                        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
+
+                        for (const userId of failedSubscribers) {
+                            const retrySent = await sendMessage(userId, `📢 Broadcast Message\n\n${message}`);
+                            if (retrySent) {
+                                successCount++;
+                                failCount--;
+                                console.log(`✅ Successfully sent broadcast to subscriber ${userId} after retry`);
+                            } else {
+                                console.error(`❌ Failed to send broadcast to subscriber ${userId} after retry`);
+                            }
                         }
                     }
 
