@@ -489,6 +489,11 @@ app.post('/webhook', async (req, res) => {
             if (event.message && event.message.text) {
                 const text = event.message.text.trim();
 
+                // Ignore messages from the bot itself
+                if (event.sender.id === event.recipient.id) {
+                    continue;
+                }
+
                 // Check rate limits first
                 const rateLimitCheck = isRateLimited(senderId);
                 if (rateLimitCheck.limited) {
