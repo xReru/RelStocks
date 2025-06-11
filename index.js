@@ -568,7 +568,7 @@ app.post('/webhook', async (req, res) => {
                             `Other Commands\n` +
                             `• /about - Little about the bot and the dev\n\n` +
                             `• /help - Show this help message\n\n` +
-                            `ℹ️ Stock checks happen every 5 minutes in PH time.`;
+                            `ℹ️ Stock checks happen every 5 minutes.`;
                         await sendMessage(senderId, helpMessage);
                         updateRateLimits(senderId);
                         break;
