@@ -192,7 +192,8 @@ const sendMessage = async (recipientId, message) => {
         const response = await axios.post(
             `https://graph.facebook.com/v17.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
             {
-                messaging_type: 'UPDATE',
+                messaging_type: 'MESSAGE_TAG',
+                tag: 'ACCOUNT_UPDATE',
                 recipient: { id: recipientId },
                 message: { text: message },
             }
