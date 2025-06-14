@@ -288,7 +288,7 @@ const getAllStock = async (senderId) => {
 
 // Alerts configuration
 const defaultAlerts = {
-    seed_stock: ['grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily', 'coconut'],
+    seed_stock: ['coconut','grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily', 'sugar_apple'],
     gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'lightning_rod', 'friendship_pot'],
     egg_stock: ['bug_egg', 'mythical_egg', 'legendary_egg'],
     eventshop_stock: ['bee_egg', 'honey_sprinkler', 'nectar_staff']
@@ -491,7 +491,8 @@ app.post('/webhook', async (req, res) => {
 
                 // Ignore messages from the bot itself
                 if (event.sender.id === event.recipient.id) {
-                    continue;
+                    res.sendStatus(200);
+                    return;
                 }
 
                 // Check rate limits first
