@@ -579,6 +579,51 @@ app.post('/webhook', async (req, res) => {
                 // Convert to lowercase for other commands
                 const textLower = text.toLowerCase();
 
+                // Handle commands that start with specific prefixes
+                if (textLower.startsWith('/add ')) {
+                    const parts = textLower.split(' ');
+                    if (parts.length !== 3) {
+                        await sendMessage(senderId, '❌ Usage: /add <category> <item_id>');
+                        updateRateLimits(senderId);
+                        continue;
+                    }
+                    let [_, category, itemId] = parts;
+                    if (categoryAlias[category]) category = categoryAlias[category];
+                    if (!validCategories.includes(category)) {
+                        await sendMessage(senderId, `❌ Invalid category "${category}". Valid categories: ${validCategories.join(', ')}`);
+                        updateRateLimits(senderId);
+                        continue;
+                    }
+                    const success = await addAlert(senderId, category, itemId);
+                    await sendMessage(senderId, success
+                        ? `✅ Alert added for ${formatItemName(itemId)} in ${categoryNames[category] || category}`
+                        : '❌ Failed to add alert.');
+                    updateRateLimits(senderId);
+                    continue;
+                }
+
+                if (textLower.startsWith('/remove ')) {
+                    const rparts = textLower.split(' ');
+                    if (rparts.length !== 3) {
+                        await sendMessage(senderId, '❌ Usage: /remove <category> <item_id>');
+                        updateRateLimits(senderId);
+                        continue;
+                    }
+                    let [__, rcategory, ritemId] = rparts;
+                    if (categoryAlias[rcategory]) rcategory = categoryAlias[rcategory];
+                    if (!validCategories.includes(rcategory)) {
+                        await sendMessage(senderId, `❌ Invalid category "${rcategory}". Valid categories: ${validCategories.join(', ')}`);
+                        updateRateLimits(senderId);
+                        continue;
+                    }
+                    const rsuccess = await removeAlert(senderId, rcategory, ritemId);
+                    await sendMessage(senderId, rsuccess
+                        ? `✅ Alert removed for ${formatItemName(ritemId)} in ${categoryNames[rcategory] || rcategory}`
+                        : '❌ Failed to remove alert.');
+                    updateRateLimits(senderId);
+                    continue;
+                }
+
                 switch (textLower) {
                     case '/help':
                         const helpMessage = `🤖 Available Commands\n\n` +
@@ -611,47 +656,6 @@ app.post('/webhook', async (req, res) => {
                             alertMsg += `${categoryName}\n${items.map(item => `• ${formatItemName(item)}`).join('\n')}\n\n`;
                         }
                         await sendMessage(senderId, alertMsg);
-                        updateRateLimits(senderId);
-                        break;
-                    case '/add':
-                        const parts = textLower.split(' ');
-                        if (parts.length !== 3) {
-                            await sendMessage(senderId, '❌ Usage: /add <category> <item_id>');
-                            updateRateLimits(senderId);
-                            break;
-                        }
-                        let [_, category, itemId] = parts;
-                        if (categoryAlias[category]) category = categoryAlias[category];
-                        if (!validCategories.includes(category)) {
-                            await sendMessage(senderId, `❌ Invalid category "${category}". Valid categories: ${validCategories.join(', ')}`);
-                            updateRateLimits(senderId);
-                            break;
-                        }
-                        const success = await addAlert(senderId, category, itemId);
-                        await sendMessage(senderId, success
-                            ? `✅ Alert added for ${formatItemName(itemId)} in ${categoryNames[category] || category}`
-                            : '❌ Failed to add alert.');
-                        updateRateLimits(senderId);
-                        break;
-
-                    case '/remove':
-                        const rparts = textLower.split(' ');
-                        if (rparts.length !== 3) {
-                            await sendMessage(senderId, '❌ Usage: /remove <category> <item_id>');
-                            updateRateLimits(senderId);
-                            break;
-                        }
-                        let [__, rcategory, ritemId] = rparts;
-                        if (categoryAlias[rcategory]) rcategory = categoryAlias[rcategory];
-                        if (!validCategories.includes(rcategory)) {
-                            await sendMessage(senderId, `❌ Invalid category "${rcategory}". Valid categories: ${validCategories.join(', ')}`);
-                            updateRateLimits(senderId);
-                            break;
-                        }
-                        const rsuccess = await removeAlert(senderId, rcategory, ritemId);
-                        await sendMessage(senderId, rsuccess
-                            ? `✅ Alert removed for ${formatItemName(ritemId)} in ${categoryNames[rcategory] || rcategory}`
-                            : '❌ Failed to remove alert.');
                         updateRateLimits(senderId);
                         break;
 
