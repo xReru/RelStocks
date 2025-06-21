@@ -291,8 +291,8 @@ const defaultAlerts = {
     seed_stock: ['kiwi', 'bell_pepper', 'prickly_pear', 'loquat', 'feijoa', 'sugar_apple'],
     //removed seeds: coconut','grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily',
     gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'tanning_mirror', 'lightning_rod', 'friendship_pot'],
-    egg_stock: ['bug_egg', 'paradise', 'mythical_egg', 'legendary_egg'],
-    eventshop_stock: ['bee_egg', 'honey_sprinkler', 'nectar_staff']
+    egg_stock: [],
+    //eventshop_stock: ['bee_egg', 'honey_sprinkler', 'nectar_staff']
 };
 
 // Stock checking
