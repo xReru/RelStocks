@@ -602,7 +602,7 @@ app.post('/webhook', async (req, res) => {
                     case '/myalerts':
                         const userAlerts = await getUserAlerts(senderId);
                         if (!userAlerts || Object.keys(userAlerts).length === 0) {
-                            await sendMessage(senderId, '🔕 You have no active alerts. Use /addalert to add one.');
+                            await sendMessage(senderId, '🔕 You have no active alerts. Use /add <category> <item_id> to add one.');
                             break;
                         }
                         const alertMsg = `🔔 Your Active Alerts\n\n`;
