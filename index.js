@@ -648,9 +648,10 @@ app.post('/webhook', async (req, res) => {
                         const userAlerts = await getUserAlerts(senderId);
                         if (!userAlerts || Object.keys(userAlerts).length === 0) {
                             await sendMessage(senderId, '🔕 You have no active alerts. Use /add <category> <item_id> to add one.');
+                            updateRateLimits(senderId);
                             break;
                         }
-                        const alertMsg = `🔔 Your Active Alerts\n\n`;
+                        let alertMsg = `🔔 Your Active Alerts\n\n`;
                         for (const [category, items] of Object.entries(userAlerts)) {
                             const categoryName = categoryNames[category] || category;
                             alertMsg += `${categoryName}\n${items.map(item => `• ${formatItemName(item)}`).join('\n')}\n\n`;
