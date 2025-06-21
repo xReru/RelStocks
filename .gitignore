@@ -11,6 +11,8 @@ package-lock.json
 subscribers.json
 last_check.json
 test-db.js
+test-category.js
+test-comprehensive.js
 # Logs
 logs
 *.log
