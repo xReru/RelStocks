@@ -288,7 +288,8 @@ const getAllStock = async (senderId) => {
 
 // Alerts configuration
 const defaultAlerts = {
-    seed_stock: ['coconut','grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily', 'sugar_apple'],
+    seed_stock: ['kiwi', 'bell_pepper', 'prickly_pear', 'loquat', 'feijoa', 'sugar_apple'],
+    //removed seeds: coconut','grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily',
     gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'lightning_rod', 'friendship_pot'],
     egg_stock: ['bug_egg', 'mythical_egg', 'legendary_egg'],
     eventshop_stock: ['bee_egg', 'honey_sprinkler', 'nectar_staff']
