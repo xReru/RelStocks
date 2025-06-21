@@ -1,7 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const bodyParser = require('body-parser');
-const { initDatabase, getSubscribers, addSubscriber, removeSubscriber } = require('./db');
+const { initDatabase, getSubscribers, addSubscriber, removeSubscriber, addAlert, removeAlert, getUserAlerts } = require('./db');
 require('dotenv').config();
 
 const app = express();
@@ -23,7 +23,7 @@ const apiClient = axios.create({
     baseURL: API_ENDPOINT,
     timeout: 10000,
     headers: {
-        'User-Agent': 'RelStocks-Bot/1.0'
+        'User-Agent': 'RelStocks-Bot/1.1'
     }
 });
 
@@ -290,8 +290,8 @@ const getAllStock = async (senderId) => {
 const defaultAlerts = {
     seed_stock: ['kiwi', 'bell_pepper', 'prickly_pear', 'loquat', 'feijoa', 'sugar_apple'],
     //removed seeds: coconut','grape', 'mango', 'pepper', 'cacao', 'mushroom', 'ember_lily',
-    gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'lightning_rod', 'friendship_pot'],
-    egg_stock: ['bug_egg', 'mythical_egg', 'legendary_egg'],
+    gear_stock: ['advanced_sprinkler', 'master_sprinkler', 'godly_sprinkler', 'tanning_mirror', 'lightning_rod', 'friendship_pot'],
+    egg_stock: ['bug_egg', 'paradise', 'mythical_egg', 'legendary_egg'],
     eventshop_stock: ['bee_egg', 'honey_sprinkler', 'nectar_staff']
 };
 
@@ -346,6 +346,15 @@ const checkStock = async (senderId, isScheduled = false) => {
             throw new Error('No data received from API');
         }
 
+        // Get user's custom alerts or use defaults
+        let alertsToCheck = defaultAlerts;
+        if (senderId) {
+            const userAlerts = await getUserAlerts(senderId);
+            if (userAlerts && Object.keys(userAlerts).length > 0) {
+                alertsToCheck = userAlerts;
+            }
+        }
+
         let foundItems = [];
         let hasNewSeedOrGear = false;
 
@@ -357,7 +366,7 @@ const checkStock = async (senderId, isScheduled = false) => {
             }
 
             const matches = data[category]?.filter(item =>
-                item && item.item_id && defaultAlerts[category].includes(item.item_id)
+                item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
             );
 
             if (matches?.length) {
@@ -380,7 +389,7 @@ const checkStock = async (senderId, isScheduled = false) => {
             }
 
             const matches = data[category]?.filter(item =>
-                item && item.item_id && defaultAlerts[category].includes(item.item_id)
+                item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
             );
 
             if (matches?.length) {
@@ -503,6 +512,19 @@ app.post('/webhook', async (req, res) => {
                     continue;
                 }
 
+                // Category alias mapping for better UX
+                const categoryAlias = {
+                    egg: 'egg_stock',
+                    seed: 'seed_stock',
+                    gear: 'gear_stock',
+                    eventshop: 'eventshop_stock',
+                    eggs: 'egg_stock',
+                    seeds: 'seed_stock',
+                    gears: 'gear_stock',
+                    eventshops: 'eventshop_stock'
+                };
+                const validCategories = ['seed_stock', 'gear_stock', 'egg_stock', 'eventshop_stock', 'cosmetic_stock'];
+
                 // Handle broadcast command
                 if (text.startsWith('/broadcast ')) {
                     if (senderId !== ADMIN_ID) {
@@ -564,6 +586,9 @@ app.post('/webhook', async (req, res) => {
                             `• /stock - View all current stock items\n` +
                             `• /checkstock - Check for stock of the default alerts\n` +
                             `• /defaultalerts - Show items that trigger stock alerts\n\n` +
+                            `• /myalerts - View all current custom stock alert\n` +
+                            `• /add <category> <item_id> - Add an item into alert if item has space, eg. bell pepper - use /add seed bell_pepper.\n` +
+                            `• /remove <category> <item_id> - Remove an item into alert if item has space, eg. bell pepper - use /remove seed bell_pepper.\n\n` +
                             `Notification Commands\n` +
                             `• /subscribe - Get notified when items are in stock\n` +
                             `• /unsubscribe - Stop receiving notifications\n\n` +
@@ -572,6 +597,61 @@ app.post('/webhook', async (req, res) => {
                             `• /help - Show this help message\n\n` +
                             `ℹ️ Stock checks happen every 5 minutes.`;
                         await sendMessage(senderId, helpMessage);
+                        updateRateLimits(senderId);
+                        break;
+                    case '/myalerts':
+                        const userAlerts = await getUserAlerts(senderId);
+                        if (!userAlerts || Object.keys(userAlerts).length === 0) {
+                            await sendMessage(senderId, '🔕 You have no active alerts. Use /addalert to add one.');
+                            break;
+                        }
+                        const alertMsg = `🔔 Your Active Alerts\n\n`;
+                        for (const [category, items] of Object.entries(userAlerts)) {
+                            const categoryName = categoryNames[category] || category;
+                            alertMsg += `${categoryName}\n${items.map(item => `• ${formatItemName(item)}`).join('\n')}\n\n`;
+                        }
+                        await sendMessage(senderId, alertMsg);
+                        updateRateLimits(senderId);
+                        break;
+                    case '/add':
+                        const parts = textLower.split(' ');
+                        if (parts.length !== 3) {
+                            await sendMessage(senderId, '❌ Usage: /add <category> <item_id>');
+                            updateRateLimits(senderId);
+                            break;
+                        }
+                        let [_, category, itemId] = parts;
+                        if (categoryAlias[category]) category = categoryAlias[category];
+                        if (!validCategories.includes(category)) {
+                            await sendMessage(senderId, `❌ Invalid category "${category}". Valid categories: ${validCategories.join(', ')}`);
+                            updateRateLimits(senderId);
+                            break;
+                        }
+                        const success = await addAlert(senderId, category, itemId);
+                        await sendMessage(senderId, success
+                            ? `✅ Alert added for ${formatItemName(itemId)} in ${categoryNames[category] || category}`
+                            : '❌ Failed to add alert.');
+                        updateRateLimits(senderId);
+                        break;
+
+                    case '/remove':
+                        const rparts = textLower.split(' ');
+                        if (rparts.length !== 3) {
+                            await sendMessage(senderId, '❌ Usage: /remove <category> <item_id>');
+                            updateRateLimits(senderId);
+                            break;
+                        }
+                        let [__, rcategory, ritemId] = rparts;
+                        if (categoryAlias[rcategory]) rcategory = categoryAlias[rcategory];
+                        if (!validCategories.includes(rcategory)) {
+                            await sendMessage(senderId, `❌ Invalid category "${rcategory}". Valid categories: ${validCategories.join(', ')}`);
+                            updateRateLimits(senderId);
+                            break;
+                        }
+                        const rsuccess = await removeAlert(senderId, rcategory, ritemId);
+                        await sendMessage(senderId, rsuccess
+                            ? `✅ Alert removed for ${formatItemName(ritemId)} in ${categoryNames[rcategory] || rcategory}`
+                            : '❌ Failed to remove alert.');
                         updateRateLimits(senderId);
                         break;
 

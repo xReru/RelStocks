@@ -48,6 +48,59 @@ const getSubscribers = async () => {
     }
 };
 
+const addAlert = async (userId, category, itemId) => {
+    try {
+        const { error } = await supabase
+            .from('subscriber_alerts')
+            .insert([{ user_id: userId, category, item_id: itemId }]);
+
+        if (error) throw error;
+        return true;
+    } catch (err) {
+        console.error('Error adding alert:', err);
+        return false;
+    }
+};
+
+const removeAlert = async (userId, category, itemId) => {
+    try {
+        const { error } = await supabase
+            .from('subscriber_alerts')
+            .delete()
+            .eq('user_id', userId)
+            .eq('category', category)
+            .eq('item_id', itemId);
+
+        if (error) throw error;
+        return true;
+    } catch (err) {
+        console.error('Error removing alert:', err);
+        return false;
+    }
+};
+
+const getUserAlerts = async (userId) => {
+    try {
+        const { data, error } = await supabase
+            .from('subscriber_alerts')
+            .select('category, item_id')
+            .eq('user_id', userId);
+
+        if (error) throw error;
+
+        const alerts = {};
+        for (const row of data) {
+            if (!alerts[row.category]) alerts[row.category] = [];
+            alerts[row.category].push(row.item_id);
+        }
+
+        return alerts;
+    } catch (err) {
+        console.error('Error getting user alerts:', err);
+        return {};
+    }
+};
+
 // Add a subscriber
 const addSubscriber = async (userId) => {
     try {
@@ -81,6 +134,9 @@ const removeSubscriber = async (userId) => {
 
 module.exports = {
     initDatabase,
+    addAlert,
+    removeAlert,
+    getUserAlerts,
     getSubscribers,
     addSubscriber,
     removeSubscriber
