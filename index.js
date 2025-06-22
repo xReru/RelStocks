@@ -510,55 +510,93 @@ app.post('/webhook', async (req, res) => {
         for (let event of messaging) {
             const senderId = event.sender.id;
 
-            if (event.message && event.message.text) {
-                const text = event.message.text.trim();
+            // Skip if this is not a message event or if there's no text
+            if (!event.message || !event.message.text) {
+                continue;
+            }
 
-                // Ignore messages from the bot itself
-                if (event.sender.id === event.recipient.id) {
-                    res.sendStatus(200);
-                    return;
-                }
+            const text = event.message.text.trim();
 
-                // Check rate limits first
-                const rateLimitCheck = isRateLimited(senderId);
-                if (rateLimitCheck.limited) {
-                    await sendMessage(senderId, rateLimitCheck.message);
+            // Enhanced bot message filtering to prevent infinite loops
+            // Check if this is a message from the bot itself or an echo
+            if (event.sender.id === event.recipient.id ||
+                event.message.is_echo === true ||
+                event.message.from?.id === event.recipient.id) {
+                console.log('🔄 Ignoring bot\'s own message to prevent loop');
+                continue;
+            }
+
+            // Additional safety check: ignore messages that look like bot responses
+            const botResponsePatterns = [
+                /^✅ Broadcast complete!/,
+                /^🔔 Stock Alert!/,
+                /^📢 Broadcast Message/,
+                /^📦 Here's what's currently in stock:/,
+                /^📦 Current Stock Status/,
+                /^⏳ Please wait/,
+                /^❌ Failed to/,
+                /^✅ Successfully/,
+                /^🔄 Retrying/,
+                /^🤖 Available Commands/,
+                /^🔔 Your Active Alerts/,
+                /^🔔 Default Stock Alerts/,
+                /^🤖 About the Bot/
+            ];
+
+            if (botResponsePatterns.some(pattern => pattern.test(text))) {
+                console.log('🔄 Ignoring message that appears to be a bot response');
+                continue;
+            }
+
+            // Check rate limits first
+            const rateLimitCheck = isRateLimited(senderId);
+            if (rateLimitCheck.limited) {
+                await sendMessage(senderId, rateLimitCheck.message);
+                continue;
+            }
+
+            // Category alias mapping for better UX
+            const categoryAlias = {
+                egg: 'egg_stock',
+                seed: 'seed_stock',
+                gear: 'gear_stock',
+                eventshop: 'eventshop_stock',
+                eggs: 'egg_stock',
+                seeds: 'seed_stock',
+                gears: 'gear_stock',
+                eventshops: 'eventshop_stock'
+            };
+            const validCategories = ['seed_stock', 'gear_stock', 'egg_stock', 'eventshop_stock', 'cosmetic_stock'];
+
+            // Handle broadcast command with enhanced safety
+            if (text.startsWith('/broadcast ')) {
+                if (senderId !== ADMIN_ID) {
+                    await sendMessage(senderId, '❌ You are not authorized to use this command.');
+                    updateRateLimits(senderId);
                     continue;
                 }
 
-                // Category alias mapping for better UX
-                const categoryAlias = {
-                    egg: 'egg_stock',
-                    seed: 'seed_stock',
-                    gear: 'gear_stock',
-                    eventshop: 'eventshop_stock',
-                    eggs: 'egg_stock',
-                    seeds: 'seed_stock',
-                    gears: 'gear_stock',
-                    eventshops: 'eventshop_stock'
-                };
-                const validCategories = ['seed_stock', 'gear_stock', 'egg_stock', 'eventshop_stock', 'cosmetic_stock'];
+                const message = text.slice('/broadcast '.length);
+                if (!message) {
+                    await sendMessage(senderId, '❌ Please provide a message to broadcast.');
+                    updateRateLimits(senderId);
+                    continue;
+                }
 
-                // Handle broadcast command
-                if (text.startsWith('/broadcast ')) {
-                    if (senderId !== ADMIN_ID) {
-                        await sendMessage(senderId, '❌ You are not authorized to use this command.');
-                        continue;
-                    }
+                // Add a unique identifier to prevent processing the confirmation message
+                const broadcastId = Date.now().toString();
+                const broadcastMessage = `📢 Broadcast Message\n\n${message}`;
 
-                    const message = text.slice('/broadcast '.length);
-                    if (!message) {
-                        await sendMessage(senderId, '❌ Please provide a message to broadcast.');
-                        continue;
-                    }
+                let successCount = 0;
+                let failCount = 0;
+                const failedSubscribers = new Set();
 
-                    let successCount = 0;
-                    let failCount = 0;
-                    const failedSubscribers = new Set();
+                console.log(`📢 Starting broadcast to ${subscribedUsers.size} subscribers...`);
 
-                    // First attempt to send to all subscribers
-                    for (const userId of subscribedUsers) {
-                        const sent = await sendMessage(userId, `📢 Broadcast Message\n\n${message}`);
+                // First attempt to send to all subscribers
+                for (const userId of subscribedUsers) {
+                    try {
+                        const sent = await sendMessage(userId, broadcastMessage);
                         if (sent) {
                             successCount++;
                         } else {
@@ -566,15 +604,23 @@ app.post('/webhook', async (req, res) => {
                             failedSubscribers.add(userId);
                             failCount++;
                         }
+                        // Add small delay between messages to prevent rate limiting
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    } catch (err) {
+                        console.error(`❌ Error sending broadcast to ${userId}:`, err.message);
+                        failedSubscribers.add(userId);
+                        failCount++;
                     }
+                }
 
-                    // If there are failed subscribers, wait 5 seconds and retry once
-                    if (failedSubscribers.size > 0) {
-                        console.log(`🔄 Retrying failed broadcasts for ${failedSubscribers.size} subscribers...`);
-                        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
+                // If there are failed subscribers, wait 5 seconds and retry once
+                if (failedSubscribers.size > 0) {
+                    console.log(`🔄 Retrying failed broadcasts for ${failedSubscribers.size} subscribers...`);
+                    await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
 
-                        for (const userId of failedSubscribers) {
-                            const retrySent = await sendMessage(userId, `📢 Broadcast Message\n\n${message}`);
+                    for (const userId of failedSubscribers) {
+                        try {
+                            const retrySent = await sendMessage(userId, broadcastMessage);
                             if (retrySent) {
                                 successCount++;
                                 failCount--;
@@ -582,193 +628,199 @@ app.post('/webhook', async (req, res) => {
                             } else {
                                 console.error(`❌ Failed to send broadcast to subscriber ${userId} after retry`);
                             }
+                            // Add small delay between retry messages
+                            await new Promise(resolve => setTimeout(resolve, 100));
+                        } catch (err) {
+                            console.error(`❌ Error retrying broadcast to ${userId}:`, err.message);
                         }
                     }
+                }
 
-                    await sendMessage(senderId, `✅ Broadcast complete!\n• Successfully sent: ${successCount}\n• Failed to send: ${failCount}`);
+                // Send confirmation message with unique identifier
+                const confirmationMessage = `✅ Broadcast complete!\n• Successfully sent: ${successCount}\n• Failed to send: ${failCount}\n• Broadcast ID: ${broadcastId}`;
+                await sendMessage(senderId, confirmationMessage);
+                updateRateLimits(senderId);
+                continue;
+            }
+
+            // Convert to lowercase for other commands
+            const textLower = text.toLowerCase();
+
+            // Handle commands that start with specific prefixes
+            if (textLower.startsWith('/add ')) {
+                const parts = textLower.split(' ');
+                if (parts.length !== 3) {
+                    await sendMessage(senderId, '❌ Usage: /add <category> <item_id>');
                     updateRateLimits(senderId);
                     continue;
                 }
-
-                // Convert to lowercase for other commands
-                const textLower = text.toLowerCase();
-
-                // Handle commands that start with specific prefixes
-                if (textLower.startsWith('/add ')) {
-                    const parts = textLower.split(' ');
-                    if (parts.length !== 3) {
-                        await sendMessage(senderId, '❌ Usage: /add <category> <item_id>');
-                        updateRateLimits(senderId);
-                        continue;
-                    }
-                    let [_, category, itemId] = parts;
-                    if (categoryAlias[category]) category = categoryAlias[category];
-                    if (!validCategories.includes(category)) {
-                        await sendMessage(senderId, `❌ Invalid category "${category}". Valid categories: ${validCategories.join(', ')}`);
-                        updateRateLimits(senderId);
-                        continue;
-                    }
-                    const success = await addAlert(senderId, category, itemId);
-                    await sendMessage(senderId, success
-                        ? `✅ Alert added for ${formatItemName(itemId)} in ${categoryNames[category] || category}`
-                        : '❌ Failed to add alert.');
+                let [_, category, itemId] = parts;
+                if (categoryAlias[category]) category = categoryAlias[category];
+                if (!validCategories.includes(category)) {
+                    await sendMessage(senderId, `❌ Invalid category "${category}". Valid categories: ${validCategories.join(', ')}`);
                     updateRateLimits(senderId);
                     continue;
                 }
+                const success = await addAlert(senderId, category, itemId);
+                await sendMessage(senderId, success
+                    ? `✅ Alert added for ${formatItemName(itemId)} in ${categoryNames[category] || category}`
+                    : '❌ Failed to add alert.');
+                updateRateLimits(senderId);
+                continue;
+            }
 
-                if (textLower.startsWith('/remove ')) {
-                    const rparts = textLower.split(' ');
-                    if (rparts.length !== 3) {
-                        await sendMessage(senderId, '❌ Usage: /remove <category> <item_id>');
-                        updateRateLimits(senderId);
-                        continue;
-                    }
-                    let [__, rcategory, ritemId] = rparts;
-                    if (categoryAlias[rcategory]) rcategory = categoryAlias[rcategory];
-                    if (!validCategories.includes(rcategory)) {
-                        await sendMessage(senderId, `❌ Invalid category "${rcategory}". Valid categories: ${validCategories.join(', ')}`);
-                        updateRateLimits(senderId);
-                        continue;
-                    }
-                    const rsuccess = await removeAlert(senderId, rcategory, ritemId);
-                    await sendMessage(senderId, rsuccess
-                        ? `✅ Alert removed for ${formatItemName(ritemId)} in ${categoryNames[rcategory] || rcategory}`
-                        : '❌ Failed to remove alert.');
+            if (textLower.startsWith('/remove ')) {
+                const rparts = textLower.split(' ');
+                if (rparts.length !== 3) {
+                    await sendMessage(senderId, '❌ Usage: /remove <category> <item_id>');
                     updateRateLimits(senderId);
                     continue;
                 }
+                let [__, rcategory, ritemId] = rparts;
+                if (categoryAlias[rcategory]) rcategory = categoryAlias[rcategory];
+                if (!validCategories.includes(rcategory)) {
+                    await sendMessage(senderId, `❌ Invalid category "${rcategory}". Valid categories: ${validCategories.join(', ')}`);
+                    updateRateLimits(senderId);
+                    continue;
+                }
+                const rsuccess = await removeAlert(senderId, rcategory, ritemId);
+                await sendMessage(senderId, rsuccess
+                    ? `✅ Alert removed for ${formatItemName(ritemId)} in ${categoryNames[rcategory] || rcategory}`
+                    : '❌ Failed to remove alert.');
+                updateRateLimits(senderId);
+                continue;
+            }
 
-                switch (textLower) {
-                    case '/help':
-                        const helpMessage = `🤖 Available Commands\n\n` +
-                            `Stock Commands (Watch out for typos!)\n` +
-                            `• /stock - View all current stock items\n` +
-                            `• /checkstock - Check for stock of the default alerts\n` +
-                            `• /defaultalerts - Show items that trigger stock alerts\n\n` +
-                            `• /myalerts - View all current custom stock alert\n` +
-                            `• /add <category> <item_id> - Add an item into alert if item has space, eg. bell pepper - use /add seed bell_pepper.\n` +
-                            `• /remove <category> <item_id> - Remove an item into alert if item has space, eg. bell pepper - use /remove seed bell_pepper.\n\n` +
-                            `Notification Commands\n` +
-                            `• /subscribe - Get notified when items are in stock\n` +
-                            `• /unsubscribe - Stop receiving notifications\n\n` +
-                            `Other Commands\n` +
-                            `• /about - Little about the bot and the dev\n\n` +
-                            `• /help - Show this help message\n\n` +
-                            `ℹ️ Stock checks happen every 5 minutes.`;
-                        await sendMessage(senderId, helpMessage);
+            switch (textLower) {
+                case '/help':
+                    const helpMessage = `🤖 Available Commands\n\n` +
+                        `Stock Commands (Watch out for typos!)\n` +
+                        `• /stock - View all current stock items\n` +
+                        `• /checkstock - Check for stock of the default alerts\n` +
+                        `• /defaultalerts - Show items that trigger stock alerts\n\n` +
+                        `• /myalerts - View all current custom stock alert\n` +
+                        `• /add <category> <item_id> - Add an item into alert if item has space, eg. bell pepper - use /add seed bell_pepper.\n` +
+                        `• /remove <category> <item_id> - Remove an item into alert if item has space, eg. bell pepper - use /remove seed bell_pepper.\n\n` +
+                        `Notification Commands\n` +
+                        `• /subscribe - Get notified when items are in stock\n` +
+                        `• /unsubscribe - Stop receiving notifications\n\n` +
+                        `Other Commands\n` +
+                        `• /about - Little about the bot and the dev\n\n` +
+                        `• /help - Show this help message\n\n` +
+                        `ℹ️ Stock checks happen every 5 minutes.`;
+                    await sendMessage(senderId, helpMessage);
+                    updateRateLimits(senderId);
+                    break;
+                case '/myalerts':
+                    const userAlerts = await getUserAlerts(senderId);
+                    if (!userAlerts || Object.keys(userAlerts).length === 0) {
+                        await sendMessage(senderId, '🔕 You have no active alerts. Use /add <category> <item_id> to add one.');
                         updateRateLimits(senderId);
                         break;
-                    case '/myalerts':
-                        const userAlerts = await getUserAlerts(senderId);
-                        if (!userAlerts || Object.keys(userAlerts).length === 0) {
-                            await sendMessage(senderId, '🔕 You have no active alerts. Use /add <category> <item_id> to add one.');
-                            updateRateLimits(senderId);
-                            break;
-                        }
-                        let alertMsg = `🔔 Your Active Alerts\n\n`;
-                        for (const [category, items] of Object.entries(userAlerts)) {
-                            const categoryName = categoryNames[category] || category;
-                            alertMsg += `${categoryName}\n${items.map(item => `• ${formatItemName(item)}`).join('\n')}\n\n`;
-                        }
-                        await sendMessage(senderId, alertMsg);
-                        updateRateLimits(senderId);
-                        break;
+                    }
+                    let alertMsg = `🔔 Your Active Alerts\n\n`;
+                    for (const [category, items] of Object.entries(userAlerts)) {
+                        const categoryName = categoryNames[category] || category;
+                        alertMsg += `${categoryName}\n${items.map(item => `• ${formatItemName(item)}`).join('\n')}\n\n`;
+                    }
+                    await sendMessage(senderId, alertMsg);
+                    updateRateLimits(senderId);
+                    break;
 
-                    case '/subscribe':
-                        if (subscribedUsers.has(senderId)) {
-                            await sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
+                case '/subscribe':
+                    if (subscribedUsers.has(senderId)) {
+                        await sendMessage(senderId, '✅ You are already subscribed to stock alerts.');
+                    } else {
+                        const success = await addSubscriber(senderId);
+                        if (success) {
+                            subscribedUsers.add(senderId);
+                            await sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
                         } else {
-                            const success = await addSubscriber(senderId);
-                            if (success) {
-                                subscribedUsers.add(senderId);
-                                await sendMessage(senderId, '✅ You are now subscribed to stock alerts. You will be notified every 5 minutes when items are in stock.');
-                            } else {
-                                await sendMessage(senderId, '❌ Failed to subscribe. Please try again later.');
-                            }
+                            await sendMessage(senderId, '❌ Failed to subscribe. Please try again later.');
                         }
-                        updateRateLimits(senderId);
-                        break;
+                    }
+                    updateRateLimits(senderId);
+                    break;
 
-                    case '/unsubscribe':
-                        if (subscribedUsers.has(senderId)) {
-                            const success = await removeSubscriber(senderId);
-                            if (success) {
-                                subscribedUsers.delete(senderId);
-                                await sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
-                            } else {
-                                await sendMessage(senderId, '❌ Failed to unsubscribe. Please try again later.');
-                            }
+                case '/unsubscribe':
+                    if (subscribedUsers.has(senderId)) {
+                        const success = await removeSubscriber(senderId);
+                        if (success) {
+                            subscribedUsers.delete(senderId);
+                            await sendMessage(senderId, '❌ You have been unsubscribed from stock alerts.');
                         } else {
-                            await sendMessage(senderId, 'ℹ️ You are not currently subscribed to stock alerts.');
+                            await sendMessage(senderId, '❌ Failed to unsubscribe. Please try again later.');
                         }
-                        updateRateLimits(senderId);
-                        break;
+                    } else {
+                        await sendMessage(senderId, 'ℹ️ You are not currently subscribed to stock alerts.');
+                    }
+                    updateRateLimits(senderId);
+                    break;
 
-                    case '/checkstock':
-                        // Check stock command cooldown
-                        const lastStockCheck = stockCommandCooldown.get(senderId) || 0;
-                        const timeSinceLastStockCheck = Date.now() - lastStockCheck;
+                case '/checkstock':
+                    // Check stock command cooldown
+                    const lastStockCheck = stockCommandCooldown.get(senderId) || 0;
+                    const timeSinceLastStockCheck = Date.now() - lastStockCheck;
 
-                        if (timeSinceLastStockCheck < STOCK_COMMAND_COOLDOWN) {
-                            const remainingTime = Math.ceil((STOCK_COMMAND_COOLDOWN - timeSinceLastStockCheck) / 1000);
-                            await sendMessage(senderId, `⏳ Please wait ${remainingTime} second(s) before checking stock again.`);
-                            continue;
-                        }
+                    if (timeSinceLastStockCheck < STOCK_COMMAND_COOLDOWN) {
+                        const remainingTime = Math.ceil((STOCK_COMMAND_COOLDOWN - timeSinceLastStockCheck) / 1000);
+                        await sendMessage(senderId, `⏳ Please wait ${remainingTime} second(s) before checking stock again.`);
+                        continue;
+                    }
 
-                        // Update last stock check time
-                        stockCommandCooldown.set(senderId, Date.now());
-                        await sendMessage(senderId, "🔍 Checking stock, please wait...");
-                        await checkStock(senderId);
-                        updateRateLimits(senderId);
-                        break;
+                    // Update last stock check time
+                    stockCommandCooldown.set(senderId, Date.now());
+                    await sendMessage(senderId, "🔍 Checking stock, please wait...");
+                    await checkStock(senderId);
+                    updateRateLimits(senderId);
+                    break;
 
-                    case '/stock':
-                        // Check stock command cooldown
-                        const lastStockView = stockCommandCooldown.get(senderId) || 0;
-                        const timeSinceLastStockView = Date.now() - lastStockView;
+                case '/stock':
+                    // Check stock command cooldown
+                    const lastStockView = stockCommandCooldown.get(senderId) || 0;
+                    const timeSinceLastStockView = Date.now() - lastStockView;
 
-                        if (timeSinceLastStockView < STOCK_COMMAND_COOLDOWN) {
-                            const remainingTime = Math.ceil((STOCK_COMMAND_COOLDOWN - timeSinceLastStockView) / 1000);
-                            await sendMessage(senderId, `⏳ Please wait ${remainingTime} second(s) before checking stock again.`);
-                            continue;
-                        }
+                    if (timeSinceLastStockView < STOCK_COMMAND_COOLDOWN) {
+                        const remainingTime = Math.ceil((STOCK_COMMAND_COOLDOWN - timeSinceLastStockView) / 1000);
+                        await sendMessage(senderId, `⏳ Please wait ${remainingTime} second(s) before checking stock again.`);
+                        continue;
+                    }
 
-                        // Update last stock check time
-                        stockCommandCooldown.set(senderId, Date.now());
-                        await sendMessage(senderId, "🔍 Checking current stock status...");
-                        await getAllStock(senderId);
-                        updateRateLimits(senderId);
-                        break;
-                    case '/about':
-                        const aboutMessage = `🤖 About the Bot\n\n` +
-                            `• This bot is developed by Janrell Quiaroro(Rel).\n\n` +
-                            `• It checks the stock of the game Grow a Garden (Roblox) every 5 minutes and sends notifications to users when new items are in stock.\n\n` +
-                            `• Rel created this bot for his own use, but decided to share it with the community.\n\n` +
-                            `• The services of this bot is free, Shout out to JoshLei for providing the API.\n\n` +
-                            `• Please DO NOT abuse the services of this bot, and keep the minimize sending commands.\n\n` +
-                            `• If you have any suggestions, please contact Rel on discord (@reruu).\n\n`;
-                        await sendMessage(senderId, aboutMessage);
-                        updateRateLimits(senderId);
-                        break;
+                    // Update last stock check time
+                    stockCommandCooldown.set(senderId, Date.now());
+                    await sendMessage(senderId, "🔍 Checking current stock status...");
+                    await getAllStock(senderId);
+                    updateRateLimits(senderId);
+                    break;
+                case '/about':
+                    const aboutMessage = `🤖 About the Bot\n\n` +
+                        `• This bot is developed by Janrell Quiaroro(Rel).\n\n` +
+                        `• It checks the stock of the game Grow a Garden (Roblox) every 5 minutes and sends notifications to users when new items are in stock.\n\n` +
+                        `• Rel created this bot for his own use, but decided to share it with the community.\n\n` +
+                        `• The services of this bot is free, Shout out to JoshLei for providing the API.\n\n` +
+                        `• Please DO NOT abuse the services of this bot, and keep the minimize sending commands.\n\n` +
+                        `• If you have any suggestions, please contact Rel on discord (@reruu).\n\n`;
+                    await sendMessage(senderId, aboutMessage);
+                    updateRateLimits(senderId);
+                    break;
 
-                    case '/defaultalerts':
-                        let alertsMessage = `🔔 Default Stock Alerts\n\n`;
+                case '/defaultalerts':
+                    let alertsMessage = `🔔 Default Stock Alerts\n\n`;
 
-                        for (const [category, items] of Object.entries(defaultAlerts)) {
-                            const categoryName = categoryNames[category] || category;
-                            const formattedItems = items.map(item => `• ${formatItemName(item)}`).join('\n');
-                            alertsMessage += `${categoryName}\n${formattedItems}\n\n`;
-                        }
+                    for (const [category, items] of Object.entries(defaultAlerts)) {
+                        const categoryName = categoryNames[category] || category;
+                        const formattedItems = items.map(item => `• ${formatItemName(item)}`).join('\n');
+                        alertsMessage += `${categoryName}\n${formattedItems}\n\n`;
+                    }
 
-                        alertsMessage += `ℹ️ These are the items that will trigger notifications when they are in stock.`;
-                        await sendMessage(senderId, alertsMessage);
-                        updateRateLimits(senderId);
-                        break;
+                    alertsMessage += `ℹ️ These are the items that will trigger notifications when they are in stock.`;
+                    await sendMessage(senderId, alertsMessage);
+                    updateRateLimits(senderId);
+                    break;
 
-                    default:
-                        await sendMessage(senderId, "✅ Bot is live! Use /help to see all available commands.");
-                        updateRateLimits(senderId);
-                }
+                default:
+                    await sendMessage(senderId, "✅ Bot is live! Use /help to see all available commands.");
+                    updateRateLimits(senderId);
             }
         }
     }
