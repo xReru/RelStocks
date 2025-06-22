@@ -72,6 +72,27 @@ const lastSeenStock = new Map();
 // Track last check time for 30-min categories
 const lastCheckTime30Min = new Map();
 
+// Track recently sent messages to prevent loops
+const recentlySentMessages = new Set();
+const MESSAGE_TRACKING_DURATION = 30 * 1000; // 30 seconds
+
+// Function to add message to tracking
+const trackSentMessage = (message) => {
+    const messageHash = Buffer.from(message).toString('base64').substring(0, 20);
+    recentlySentMessages.add(messageHash);
+
+    // Clean up old messages after tracking duration
+    setTimeout(() => {
+        recentlySentMessages.delete(messageHash);
+    }, MESSAGE_TRACKING_DURATION);
+};
+
+// Function to check if message was recently sent
+const isRecentlySentMessage = (message) => {
+    const messageHash = Buffer.from(message).toString('base64').substring(0, 20);
+    return recentlySentMessages.has(messageHash);
+};
+
 // Function to check if user is rate limited
 const isRateLimited = (senderId) => {
     const now = Date.now();
@@ -204,6 +225,10 @@ const sendMessage = async (recipientId, message) => {
         }
 
         console.log('✅ Message sent to:', recipientId);
+
+        // Track the sent message to prevent loops
+        trackSentMessage(message);
+
         return true;
     } catch (err) {
         console.error('❌ Failed to send message:', err.response?.data || err.message);
@@ -526,6 +551,12 @@ app.post('/webhook', async (req, res) => {
                 continue;
             }
 
+            // Check if this message was recently sent by the bot
+            if (isRecentlySentMessage(text)) {
+                console.log('🔄 Ignoring recently sent message to prevent loop');
+                continue;
+            }
+
             // Additional safety check: ignore messages that look like bot responses
             const botResponsePatterns = [
                 /^✅ Broadcast complete!/,
@@ -540,11 +571,29 @@ app.post('/webhook', async (req, res) => {
                 /^🤖 Available Commands/,
                 /^🔔 Your Active Alerts/,
                 /^🔔 Default Stock Alerts/,
-                /^🤖 About the Bot/
+                /^🤖 About the Bot/,
+                /^✅ Bot is live!/,
+                /^✅ You are already subscribed/,
+                /^✅ You are now subscribed/,
+                /^❌ You have been unsubscribed/,
+                /^ℹ️ You are not currently subscribed/,
+                /^🔕 You have no active alerts/,
+                /^✅ Alert added for/,
+                /^✅ Alert removed for/,
+                /^❌ Failed to add alert/,
+                /^❌ Failed to remove alert/,
+                /^❌ Usage:/,
+                /^❌ Invalid category/,
+                /^❌ You are not authorized/,
+                /^❌ Please provide a message/,
+                /^⏳ Please wait \d+ second/,
+                /^⏳ Please wait \d+ minute/,
+                /^🔍 Checking stock/,
+                /^🔍 Checking current stock/
             ];
 
             if (botResponsePatterns.some(pattern => pattern.test(text))) {
-                console.log('🔄 Ignoring message that appears to be a bot response');
+                console.log('🔄 Ignoring message that appears to be a bot response:', text.substring(0, 50) + '...');
                 continue;
             }
 
