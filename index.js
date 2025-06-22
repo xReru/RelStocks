@@ -346,122 +346,38 @@ const checkStock = async (senderId, isScheduled = false) => {
             throw new Error('No data received from API');
         }
 
-        // Get user's custom alerts or use defaults
-        let alertsToCheck = defaultAlerts;
-        if (senderId) {
-            const userAlerts = await getUserAlerts(senderId);
-            if (userAlerts && Object.keys(userAlerts).length > 0) {
-                alertsToCheck = userAlerts;
-            }
+        // For manual checks, check alerts for the specific user
+        if (senderId && !isScheduled) {
+            await checkStockForUser(senderId, data);
+            return;
         }
 
-        let foundItems = [];
-        let hasNewSeedOrGear = false;
-
-        // First check seed and gear stock
-        for (let category of ['seed_stock', 'gear_stock']) {
-            if (!data[category]) {
-                console.warn(`⚠️ Category not found in API response: ${category}`);
-                continue;
-            }
-
-            const matches = data[category]?.filter(item =>
-                item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
-            );
-
-            if (matches?.length) {
-                const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
-                foundItems.push(`${categoryNames[category]}\n${itemsList}`);
-                hasNewSeedOrGear = true;
-            }
-        }
-
-        // Add delay before checking 30-min restock items
+        // For scheduled checks, check alerts for each subscriber individually
         if (isScheduled) {
-            await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second delay for 30-min items
-        }
+            const failedSubscribers = new Set();
 
-        // Then check egg and eventshop stock
-        for (let category of ['egg_stock', 'eventshop_stock']) {
-            if (!data[category]) {
-                console.warn(`⚠️ Category not found in API response: ${category}`);
-                continue;
-            }
-
-            const matches = data[category]?.filter(item =>
-                item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
-            );
-
-            if (matches?.length) {
-                const currentItems = new Set(matches.map(i => i.item_id));
-                const lastSeen = lastSeenStock.get(category) || new Set();
-                const lastCheck = lastCheckTime30Min.get(category) || 0;
-                const now = Date.now();
-
-                // Check if it's been 30 minutes since last check
-                const is30MinInterval = (now - lastCheck) >= 30 * 60 * 1000;
-
-                // Check if there are any new items
-                const hasNewItems = [...currentItems].some(item => !lastSeen.has(item));
-
-                // Only include if:
-                // 1. There are new seed/gear items, OR
-                // 2. It's a new 30-min restock (has new items and 30 mins passed)
-                if (hasNewItems || hasNewSeedOrGear) {
-                    const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
-                    foundItems.push(`${categoryNames[category]}\n${itemsList}`);
-
-                    if (is30MinInterval) {
-                        lastCheckTime30Min.set(category, now);
-                    }
-                }
-
-                // Always update last seen items
-                lastSeenStock.set(category, currentItems);
-            }
-        }
-
-        if (foundItems.length) {
-            const message = `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`;
-
-            if (senderId) {
-                const sent = await sendMessage(senderId, message);
-                if (!sent) {
-                    console.error(`❌ Failed to send message to user ${senderId}`);
-                }
-            } else if (isScheduled) {
-                // Only notify subscribers during scheduled checks
-                const failedSubscribers = new Set();
-
-                // First attempt to send to all subscribers
-                for (const userId of subscribedUsers) {
-                    const sent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
-                    if (!sent) {
-                        console.error(`❌ Failed to send alert to subscriber ${userId}, will retry`);
-                        failedSubscribers.add(userId);
-                    }
-                }
-
-                // If there are failed subscribers, wait 5 seconds and retry once
-                if (failedSubscribers.size > 0) {
-                    console.log(`🔄 Retrying failed notifications for ${failedSubscribers.size} subscribers...`);
-                    await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
-
-                    for (const userId of failedSubscribers) {
-                        const retrySent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
-                        if (!retrySent) {
-                            console.error(`❌ Failed to send alert to subscriber ${userId} after retry`);
-                        } else {
-                            console.log(`✅ Successfully sent alert to subscriber ${userId} after retry`);
-                        }
-                    }
+            for (const userId of subscribedUsers) {
+                try {
+                    await checkStockForUser(userId, data, true);
+                } catch (err) {
+                    console.error(`❌ Failed to check stock for subscriber ${userId}:`, err.message);
+                    failedSubscribers.add(userId);
                 }
             }
-        } else {
-            if (isScheduled) {
-                console.log('✅ No new stock to alert at this time');
-            } else {
-                console.log('✅ No matching stock found at this time');
+
+            // If there are failed subscribers, wait 5 seconds and retry once
+            if (failedSubscribers.size > 0) {
+                console.log(`🔄 Retrying failed checks for ${failedSubscribers.size} subscribers...`);
+                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
+
+                for (const userId of failedSubscribers) {
+                    try {
+                        await checkStockForUser(userId, data, true);
+                        console.log(`✅ Successfully checked stock for subscriber ${userId} after retry`);
+                    } catch (err) {
+                        console.error(`❌ Failed to check stock for subscriber ${userId} after retry:`, err.message);
+                    }
+                }
             }
         }
     } catch (err) {
@@ -475,6 +391,104 @@ const checkStock = async (senderId, isScheduled = false) => {
 
         if (senderId) {
             await sendMessage(senderId, '❌ Sorry, there was an error checking the stock. Please try again later.');
+        }
+    }
+};
+
+// Helper function to check stock for a specific user
+const checkStockForUser = async (userId, data, isScheduled = false) => {
+    // Get user's custom alerts or use defaults
+    let alertsToCheck = defaultAlerts;
+    const userAlerts = await getUserAlerts(userId);
+    if (userAlerts && Object.keys(userAlerts).length > 0) {
+        alertsToCheck = userAlerts;
+    }
+
+    let foundItems = [];
+    let hasNewSeedOrGear = false;
+
+    // First check seed and gear stock
+    for (let category of ['seed_stock', 'gear_stock']) {
+        if (!data[category]) {
+            console.warn(`⚠️ Category not found in API response: ${category}`);
+            continue;
+        }
+
+        const matches = data[category]?.filter(item =>
+            item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
+        );
+
+        if (matches?.length) {
+            const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
+            foundItems.push(`${categoryNames[category]}\n${itemsList}`);
+            hasNewSeedOrGear = true;
+        }
+    }
+
+    // Add delay before checking 30-min restock items
+    if (isScheduled) {
+        await new Promise(resolve => setTimeout(resolve, 5000)); // 5 second delay for 30-min items
+    }
+
+    // Then check egg and eventshop stock
+    for (let category of ['egg_stock', 'eventshop_stock']) {
+        if (!data[category]) {
+            console.warn(`⚠️ Category not found in API response: ${category}`);
+            continue;
+        }
+
+        const matches = data[category]?.filter(item =>
+            item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
+        );
+
+        if (matches?.length) {
+            const currentItems = new Set(matches.map(i => i.item_id));
+            const lastSeen = lastSeenStock.get(category) || new Set();
+            const lastCheck = lastCheckTime30Min.get(category) || 0;
+            const now = Date.now();
+
+            // Check if it's been 30 minutes since last check
+            const is30MinInterval = (now - lastCheck) >= 30 * 60 * 1000;
+
+            // Check if there are any new items
+            const hasNewItems = [...currentItems].some(item => !lastSeen.has(item));
+
+            // Only include if:
+            // 1. There are new seed/gear items, OR
+            // 2. It's a new 30-min restock (has new items and 30 mins passed)
+            if (hasNewItems || hasNewSeedOrGear) {
+                const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
+                foundItems.push(`${categoryNames[category]}\n${itemsList}`);
+
+                if (is30MinInterval) {
+                    lastCheckTime30Min.set(category, now);
+                }
+            }
+
+            // Always update last seen items
+            lastSeenStock.set(category, currentItems);
+        }
+    }
+
+    if (foundItems.length) {
+        const message = `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`;
+
+        if (isScheduled) {
+            const sent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
+            if (!sent) {
+                throw new Error(`Failed to send alert to subscriber ${userId}`);
+            }
+        } else {
+            const sent = await sendMessage(userId, message);
+            if (!sent) {
+                console.error(`❌ Failed to send message to user ${userId}`);
+            }
+        }
+    } else {
+        if (isScheduled) {
+            console.log(`✅ No new stock to alert for subscriber ${userId}`);
+        } else {
+            console.log('✅ No matching stock found at this time');
         }
     }
 };
