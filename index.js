@@ -815,7 +815,7 @@ const handleBroadcastCommand = async (senderId, text) => {
 
         // Create broadcast message with unique identifier
         const broadcastId = Date.now().toString();
-        const broadcastMessage = `📢 Broadcast Message\n\n${message}\n\nBroadcast ID: ${broadcastId}`;
+        const broadcastMessage = `📢 Broadcast Message\n\n${message}\n\n-Rel`;
 
         let successCount = 0;
         let failCount = 0;
