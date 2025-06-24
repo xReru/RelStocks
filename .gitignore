@@ -13,6 +13,11 @@ last_check.json
 test-db.js
 test-category.js
 test-comprehensive.js
+ws.js
+index-old.js
+test-websocket.js
+REFACTOR_README.md
+
 # Logs
 logs
 *.log
