@@ -33,12 +33,18 @@ if (!PAGE_ACCESS_TOKEN || !VERIFY_TOKEN || !ADMIN_ID || !API_ENDPOINT) {
 const apiClient = new APIClient(API_ENDPOINT);
 const websocketManager = new WebSocketManager(
     USER_ID,
-    null, // Will be set by StockManager
-    null, // Will be set by StockManager
-    null, // Will be set by StockManager
-    null  // Will be set by StockManager
+    null, // Will be set in initializeApp
+    (error) => console.error('❌ WebSocket error:', error.message),
+    () => console.log('✅ WebSocket connected - real-time stock monitoring active'),
+    () => console.log('⚠️ WebSocket disconnected - falling back to API polling')
 );
 const stockManager = new StockManager(apiClient, websocketManager);
+
+// Override stock manager's WebSocket handlers to use our functions
+stockManager.setupWebSocketHandlers = function () {
+    // Don't set up the stock manager's own handlers - we'll handle them in initializeApp
+    console.log('🔧 Stock manager WebSocket handlers disabled - using main app handlers');
+};
 
 // Rate limiting configuration
 const rateLimitConfig = {
@@ -111,6 +117,41 @@ const initializeApp = async () => {
         stockManager.setSubscribers(subscribers);
         console.log(`📋 Loaded ${subscribers.length} subscribers from database`);
 
+        // Set up WebSocket handlers to use our sendMessage function
+        websocketManager.onStockUpdate = async (data) => {
+            console.log('📦 WebSocket stock update received, checking for alerts...');
+            try {
+                // Check alerts for all subscribers when WebSocket receives update
+                const failedSubscribers = new Set();
+
+                for (const userId of stockManager.subscribers) {
+                    try {
+                        await checkStockForUser(userId, data, true);
+                    } catch (err) {
+                        console.error(`❌ Failed to check stock for subscriber ${userId}:`, err.message);
+                        failedSubscribers.add(userId);
+                    }
+                }
+
+                // If there are failed subscribers, wait 5 seconds and retry once
+                if (failedSubscribers.size > 0) {
+                    console.log(`🔄 Retrying failed checks for ${failedSubscribers.size} subscribers...`);
+                    await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
+
+                    for (const userId of failedSubscribers) {
+                        try {
+                            await checkStockForUser(userId, data, true);
+                            console.log(`✅ Successfully checked stock for subscriber ${userId} after retry`);
+                        } catch (err) {
+                            console.error(`❌ Failed to check stock for subscriber ${userId} after retry:`, err.message);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('❌ Error processing WebSocket stock update:', error.message);
+            }
+        };
+
         // Start WebSocket connection
         websocketManager.connect();
 
@@ -149,6 +190,7 @@ const sendMessage = async (recipientId, message) => {
         }
 
         console.log(`📤 Message sent to ${recipientId}`);
+        return true; // Return true on success
     } catch (error) {
         console.error('❌ Error sending message:', error.message);
         throw error;
@@ -176,7 +218,7 @@ const scheduleNextCheck = () => {
             lastScheduledCheck = currentTime;
 
             // Only run if WebSocket is not active
-            if (!stockManager.isWebSocketActive()) {
+            if (!websocketManager.isConnectionActive()) {
                 try {
                     await checkStock(null, true);
                 } catch (error) {
@@ -471,13 +513,13 @@ const handleStatusCommand = async (senderId) => {
 
         updateRateLimits(senderId, rateLimitConfig);
 
-        const wsStatus = stockManager.isWebSocketActive() ? '🟢 Active' : '🔴 Inactive';
+        const wsStatus = websocketManager.isConnectionActive() ? '🟢 Active' : '🔴 Inactive';
         const subscriberCount = stockManager.subscribers.size;
 
         const message = `📊 Bot Status\n\n` +
             `WebSocket: ${wsStatus}\n` +
             `Subscribers: ${subscriberCount}\n` +
-            `Last Update: ${stockManager.getLastStockData() ? 'Available' : 'None'}`;
+            `Last Update: ${websocketManager.getLastStockData() ? 'Available' : 'None'}`;
 
         await sendMessage(senderId, message);
 
@@ -960,9 +1002,9 @@ app.post('/webhook', (req, res) => {
 // Health check endpoint
 app.get('/health', (req, res) => {
     const status = {
-        websocket: stockManager.isWebSocketActive(),
+        websocket: websocketManager.isConnectionActive(),
         subscribers: stockManager.subscribers.size,
-        lastUpdate: stockManager.getLastStockData() ? 'Available' : 'None',
+        lastUpdate: websocketManager.getLastStockData() ? 'Available' : 'None',
         timestamp: new Date().toISOString()
     };
 
