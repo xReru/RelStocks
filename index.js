@@ -124,28 +124,33 @@ const initializeApp = async () => {
                 // Check alerts for all subscribers when WebSocket receives update
                 const failedSubscribers = new Set();
 
-                for (const userId of stockManager.subscribers) {
+                // Process all subscribers in parallel for faster alert delivery
+                const alertPromises = Array.from(stockManager.subscribers).map(async (userId) => {
                     try {
                         await checkStockForUser(userId, data, true);
                     } catch (err) {
                         console.error(`❌ Failed to check stock for subscriber ${userId}:`, err.message);
                         failedSubscribers.add(userId);
                     }
-                }
+                });
 
-                // If there are failed subscribers, wait 5 seconds and retry once
+                // Wait for all alerts to be processed
+                await Promise.allSettled(alertPromises);
+
+                // Only retry failed subscribers if there are any, but with minimal delay
                 if (failedSubscribers.size > 0) {
                     console.log(`🔄 Retrying failed checks for ${failedSubscribers.size} subscribers...`);
-                    await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
 
-                    for (const userId of failedSubscribers) {
+                    const retryPromises = Array.from(failedSubscribers).map(async (userId) => {
                         try {
                             await checkStockForUser(userId, data, true);
                             console.log(`✅ Successfully checked stock for subscriber ${userId} after retry`);
                         } catch (err) {
                             console.error(`❌ Failed to check stock for subscriber ${userId} after retry:`, err.message);
                         }
-                    }
+                    });
+
+                    await Promise.allSettled(retryPromises);
                 }
             } catch (error) {
                 console.error('❌ Error processing WebSocket stock update:', error.message);
@@ -253,7 +258,6 @@ const checkStock = async (senderId, isScheduled = false) => {
         if (senderId) {
             await sendMessage(senderId, "⏳ Please wait while I check the stock...");
         }
-        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second initial delay
 
         // Get stock data from API
         const response = await apiClient.get('/v2/growagarden/stock');
@@ -273,28 +277,33 @@ const checkStock = async (senderId, isScheduled = false) => {
         if (isScheduled) {
             const failedSubscribers = new Set();
 
-            for (const userId of stockManager.subscribers) {
+            // Process all subscribers in parallel for faster alert delivery
+            const alertPromises = Array.from(stockManager.subscribers).map(async (userId) => {
                 try {
                     await checkStockForUser(userId, data, true);
                 } catch (err) {
                     console.error(`❌ Failed to check stock for subscriber ${userId}:`, err.message);
                     failedSubscribers.add(userId);
                 }
-            }
+            });
 
-            // If there are failed subscribers, wait 5 seconds and retry once
+            // Wait for all alerts to be processed
+            await Promise.allSettled(alertPromises);
+
+            // Only retry failed subscribers if there are any, but with minimal delay
             if (failedSubscribers.size > 0) {
                 console.log(`🔄 Retrying failed checks for ${failedSubscribers.size} subscribers...`);
-                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
 
-                for (const userId of failedSubscribers) {
+                const retryPromises = Array.from(failedSubscribers).map(async (userId) => {
                     try {
                         await checkStockForUser(userId, data, true);
                         console.log(`✅ Successfully checked stock for subscriber ${userId} after retry`);
                     } catch (err) {
                         console.error(`❌ Failed to check stock for subscriber ${userId} after retry:`, err.message);
                     }
-                }
+                });
+
+                await Promise.allSettled(retryPromises);
             }
         }
     } catch (err) {
@@ -342,12 +351,7 @@ const checkStockForUser = async (userId, data, isScheduled = false) => {
         }
     }
 
-    // Add delay before checking 30-min restock items
-    if (isScheduled) {
-        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay for 30-min items
-    }
-
-    // Then check egg and eventshop stock
+    // Then check egg and eventshop stock (removed unnecessary delay)
     for (let category of ['egg_stock', 'eventshop_stock']) {
         if (!data[category]) {
             console.warn(`⚠️ Category not found in API response: ${category}`);
@@ -829,7 +833,7 @@ const handleBroadcastCommand = async (senderId, text) => {
         await sendMessage(senderId, `📢 Broadcasting message to ${stockManager.subscribers.size} subscribers...\nBroadcast ID: ${broadcastId}`);
 
         // First attempt to send to all subscribers
-        for (const userId of stockManager.subscribers) {
+        const broadcastPromises = Array.from(stockManager.subscribers).map(async (userId) => {
             try {
                 const sent = await sendMessage(userId, broadcastMessage);
                 if (sent) {
@@ -840,21 +844,21 @@ const handleBroadcastCommand = async (senderId, text) => {
                     failedSubscribers.add(userId);
                     failCount++;
                 }
-                // Add small delay between messages to prevent rate limiting
-                await new Promise(resolve => setTimeout(resolve, 200));
             } catch (err) {
                 console.error(`❌ Error sending broadcast to ${userId}:`, err.message);
                 failedSubscribers.add(userId);
                 failCount++;
             }
-        }
+        });
 
-        // If there are failed subscribers, wait 5 seconds and retry once
+        // Wait for all broadcasts to be sent
+        await Promise.allSettled(broadcastPromises);
+
+        // If there are failed subscribers, retry immediately without delay
         if (failedSubscribers.size > 0) {
             console.log(`🔄 Retrying failed broadcasts for ${failedSubscribers.size} subscribers...`);
-            await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
 
-            for (const userId of failedSubscribers) {
+            const retryPromises = Array.from(failedSubscribers).map(async (userId) => {
                 try {
                     const retrySent = await sendMessage(userId, broadcastMessage);
                     if (retrySent) {
@@ -864,12 +868,12 @@ const handleBroadcastCommand = async (senderId, text) => {
                     } else {
                         console.error(`❌ Failed to send broadcast to subscriber ${userId} after retry`);
                     }
-                    // Add small delay between retry messages
-                    await new Promise(resolve => setTimeout(resolve, 200));
                 } catch (err) {
                     console.error(`❌ Error retrying broadcast to ${userId}:`, err.message);
                 }
-            }
+            });
+
+            await Promise.allSettled(retryPromises);
         }
 
         // Send final confirmation message
