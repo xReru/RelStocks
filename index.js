@@ -98,6 +98,11 @@ const recentBroadcasts = new Map();
 const BROADCAST_COOLDOWN = 30 * 1000; // 30 seconds between broadcasts
 const BROADCAST_MESSAGE_TRACKING_DURATION = 60 * 1000; // 1 minute
 
+// Track last seen items for 30-min restock categories
+const lastSeenStock = new Map();
+// Track last check time for 30-min categories
+const lastCheckTime30Min = new Map();
+
 // Initialize application
 const initializeApp = async () => {
     try {
@@ -173,8 +178,7 @@ const scheduleNextCheck = () => {
             // Only run if WebSocket is not active
             if (!stockManager.isWebSocketActive()) {
                 try {
-                    const data = await apiClient.getStock();
-                    await stockManager.handleStockUpdate(data);
+                    await checkStock(null, true);
                 } catch (error) {
                     console.error('❌ Error in scheduled check:', error.message);
                 }
@@ -183,6 +187,186 @@ const scheduleNextCheck = () => {
 
         scheduleNextCheck();
     }, delay);
+};
+
+// Stock checking function
+const checkStock = async (senderId, isScheduled = false) => {
+    try {
+        // Check cooldown only for manual checks
+        if (senderId && !isScheduled) {
+            const lastCheck = lastCheckTime.get(senderId) || 0;
+            const timeSinceLastCheck = Date.now() - lastCheck;
+
+            if (timeSinceLastCheck < COOLDOWN_TIME) {
+                const remainingTime = Math.ceil((COOLDOWN_TIME - timeSinceLastCheck) / 1000 / 60);
+                await sendMessage(senderId, `⏳ Please wait ${remainingTime} minute(s) before checking again.`);
+                return;
+            }
+
+            // Update last check time only for manual checks
+            lastCheckTime.set(senderId, Date.now());
+        }
+
+        // Add initial delay before checking stock
+        if (senderId) {
+            await sendMessage(senderId, "⏳ Please wait while I check the stock...");
+        }
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second initial delay
+
+        // Get stock data from API
+        const response = await apiClient.get('/v2/growagarden/stock');
+        const data = response.data;
+
+        if (!data) {
+            throw new Error('No data received from API');
+        }
+
+        // For manual checks, check alerts for the specific user
+        if (senderId && !isScheduled) {
+            await checkStockForUser(senderId, data);
+            return;
+        }
+
+        // For scheduled checks, check alerts for each subscriber individually
+        if (isScheduled) {
+            const failedSubscribers = new Set();
+
+            for (const userId of stockManager.subscribers) {
+                try {
+                    await checkStockForUser(userId, data, true);
+                } catch (err) {
+                    console.error(`❌ Failed to check stock for subscriber ${userId}:`, err.message);
+                    failedSubscribers.add(userId);
+                }
+            }
+
+            // If there are failed subscribers, wait 5 seconds and retry once
+            if (failedSubscribers.size > 0) {
+                console.log(`🔄 Retrying failed checks for ${failedSubscribers.size} subscribers...`);
+                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
+
+                for (const userId of failedSubscribers) {
+                    try {
+                        await checkStockForUser(userId, data, true);
+                        console.log(`✅ Successfully checked stock for subscriber ${userId} after retry`);
+                    } catch (err) {
+                        console.error(`❌ Failed to check stock for subscriber ${userId} after retry:`, err.message);
+                    }
+                }
+            }
+        }
+    } catch (err) {
+        console.error('❌ Error in checkStock:', err.message);
+        if (err.response) {
+            console.error('API Response:', {
+                status: err.response.status,
+                data: err.response.data
+            });
+        }
+
+        if (senderId) {
+            await sendMessage(senderId, '❌ Sorry, there was an error checking the stock. Please try again later.');
+        }
+    }
+};
+
+// Helper function to check stock for a specific user
+const checkStockForUser = async (userId, data, isScheduled = false) => {
+    // Get user's custom alerts or use defaults
+    let alertsToCheck = defaultAlerts;
+    const userAlerts = await getUserAlerts(userId);
+    if (userAlerts && Object.keys(userAlerts).length > 0) {
+        alertsToCheck = userAlerts;
+    }
+
+    let foundItems = [];
+    let hasNewSeedOrGear = false;
+
+    // First check seed and gear stock
+    for (let category of ['seed_stock', 'gear_stock']) {
+        if (!data[category]) {
+            console.warn(`⚠️ Category not found in API response: ${category}`);
+            continue;
+        }
+
+        const matches = data[category]?.filter(item =>
+            item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
+        );
+
+        if (matches?.length) {
+            const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
+            foundItems.push(`${categoryNames[category]}\n${itemsList}`);
+            hasNewSeedOrGear = true;
+        }
+    }
+
+    // Add delay before checking 30-min restock items
+    if (isScheduled) {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay for 30-min items
+    }
+
+    // Then check egg and eventshop stock
+    for (let category of ['egg_stock', 'eventshop_stock']) {
+        if (!data[category]) {
+            console.warn(`⚠️ Category not found in API response: ${category}`);
+            continue;
+        }
+
+        const matches = data[category]?.filter(item =>
+            item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
+        );
+
+        if (matches?.length) {
+            const currentItems = new Set(matches.map(i => i.item_id));
+            const lastSeen = lastSeenStock.get(category) || new Set();
+            const lastCheck = lastCheckTime30Min.get(category) || 0;
+            const now = Date.now();
+
+            // Check if it's been 30 minutes since last check
+            const is30MinInterval = (now - lastCheck) >= 30 * 60 * 1000;
+
+            // Check if there are any new items
+            const hasNewItems = [...currentItems].some(item => !lastSeen.has(item));
+
+            // Only include if:
+            // 1. There are new seed/gear items, OR
+            // 2. It's a new 30-min restock (has new items and 30 mins passed)
+            if (hasNewItems || hasNewSeedOrGear) {
+                const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
+                foundItems.push(`${categoryNames[category]}\n${itemsList}`);
+
+                if (is30MinInterval) {
+                    lastCheckTime30Min.set(category, now);
+                }
+            }
+
+            // Always update last seen items
+            lastSeenStock.set(category, currentItems);
+        }
+    }
+
+    if (foundItems.length) {
+        const message = `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`;
+
+        if (isScheduled) {
+            const sent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
+            if (!sent) {
+                throw new Error(`Failed to send alert to subscriber ${userId}`);
+            }
+            console.log(`✅ Stock alert sent to ${userId}`);
+        } else {
+            const sent = await sendMessage(userId, message);
+            if (!sent) {
+                console.error(`❌ Failed to send message to user ${userId}`);
+            }
+        }
+    } else {
+        if (isScheduled) {
+            console.log(`✅ No new stock to alert for subscriber ${userId}`);
+        } else {
+            console.log('✅ No matching stock found at this time');
+        }
+    }
 };
 
 // Command handlers
@@ -209,10 +393,8 @@ const handleStockCommand = async (senderId) => {
         lastCheckTime.set(senderId, Date.now());
         updateRateLimits(senderId, rateLimitConfig);
 
-        await sendMessage(senderId, "⏳ Please wait while I check the stock...");
-
-        const message = await stockManager.manualStockCheck(senderId);
-        await sendMessage(senderId, message);
+        // Use the checkStock function for manual checks
+        await checkStock(senderId, false);
 
     } catch (error) {
         console.error('❌ Error in stock command:', error.message);
@@ -340,7 +522,6 @@ const handleHelpCommand = async (senderId) => {
 • Use \`stock\` to check for your alert items
 • Use \`all\` to see everything in stock
 • Real-time alerts are sent automatically when items become available
-• WebSocket provides instant updates, API is used for manual checks
 • Categories: seed, gear, egg, eventshop, cosmetic
 
 ⏱️ Rate Limits:
