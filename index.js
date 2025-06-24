@@ -330,11 +330,11 @@ const checkStockForUser = async (userId, data, isScheduled = false) => {
         alertsToCheck = userAlerts;
     }
 
-    let foundItems = [];
+    let allFoundItems = [];
     let hasNewSeedOrGear = false;
 
-    // First check seed and gear stock
-    for (let category of ['seed_stock', 'gear_stock']) {
+    // Check all categories and collect all available items
+    for (let category of ['seed_stock', 'gear_stock', 'egg_stock', 'eventshop_stock']) {
         if (!data[category]) {
             console.warn(`⚠️ Category not found in API response: ${category}`);
             continue;
@@ -345,57 +345,48 @@ const checkStockForUser = async (userId, data, isScheduled = false) => {
         );
 
         if (matches?.length) {
-            const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
-            foundItems.push(`${categoryNames[category]}\n${itemsList}`);
-            hasNewSeedOrGear = true;
-        }
-    }
-
-    // Then check egg and eventshop stock (removed unnecessary delay)
-    for (let category of ['egg_stock', 'eventshop_stock']) {
-        if (!data[category]) {
-            console.warn(`⚠️ Category not found in API response: ${category}`);
-            continue;
-        }
-
-        const matches = data[category]?.filter(item =>
-            item && item.item_id && alertsToCheck[category]?.includes(item.item_id)
-        );
-
-        if (matches?.length) {
-            const currentItems = new Set(matches.map(i => i.item_id));
-            const lastSeen = lastSeenStock.get(category) || new Set();
-            const lastCheck = lastCheckTime30Min.get(category) || 0;
-            const now = Date.now();
-
-            // Check if it's been 30 minutes since last check
-            const is30MinInterval = (now - lastCheck) >= 30 * 60 * 1000;
-
-            // Check if there are any new items
-            const hasNewItems = [...currentItems].some(item => !lastSeen.has(item));
-
-            // Only include if:
-            // 1. There are new seed/gear items, OR
-            // 2. It's a new 30-min restock (has new items and 30 mins passed)
-            if (hasNewItems || hasNewSeedOrGear) {
+            // For seed and gear stock, always include
+            if (category === 'seed_stock' || category === 'gear_stock') {
                 const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
-                foundItems.push(`${categoryNames[category]}\n${itemsList}`);
+                allFoundItems.push(`${categoryNames[category]}\n${itemsList}`);
+                hasNewSeedOrGear = true;
+            } else {
+                // For egg and eventshop stock (30-min restock items)
+                const currentItems = new Set(matches.map(i => i.item_id));
+                const lastSeen = lastSeenStock.get(category) || new Set();
+                const lastCheck = lastCheckTime30Min.get(category) || 0;
+                const now = Date.now();
 
-                if (is30MinInterval) {
-                    lastCheckTime30Min.set(category, now);
+                // Check if it's been 30 minutes since last check
+                const is30MinInterval = (now - lastCheck) >= 30 * 60 * 1000;
+
+                // Check if there are any new items
+                const hasNewItems = [...currentItems].some(item => !lastSeen.has(item));
+
+                // Only include if:
+                // 1. There are new seed/gear items, OR
+                // 2. It's a new 30-min restock (has new items and 30 mins passed)
+                if (hasNewItems || hasNewSeedOrGear) {
+                    const itemsList = matches.map(i => `• ${formatItemName(i.item_id)}`).join('\n');
+                    allFoundItems.push(`${categoryNames[category]}\n${itemsList}`);
+
+                    if (is30MinInterval) {
+                        lastCheckTime30Min.set(category, now);
+                    }
                 }
-            }
 
-            // Always update last seen items
-            lastSeenStock.set(category, currentItems);
+                // Always update last seen items
+                lastSeenStock.set(category, currentItems);
+            }
         }
     }
 
-    if (foundItems.length) {
-        const message = `📦 Here's what's currently in stock:\n\n${foundItems.join('\n\n')}`;
+    if (allFoundItems.length) {
+        // Send all items in a single consolidated message
+        const message = `📦 Available Stock Alert!\n\n${allFoundItems.join('\n\n')}`;
 
         if (isScheduled) {
-            const sent = await sendMessage(userId, `🔔 Stock Alert!\n\n${message}`);
+            const sent = await sendMessage(userId, `🔔 ${message}`);
             if (!sent) {
                 throw new Error(`Failed to send alert to subscriber ${userId}`);
             }
