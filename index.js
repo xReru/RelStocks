@@ -64,6 +64,26 @@ const MESSAGE_TRACKING_DURATION = 30 * 1000; // 30 seconds
 // Scheduled check tracking
 let lastScheduledCheck = 0;
 
+// Format item name for display
+const formatItemName = (itemId) => {
+    if (!itemId) return 'Unknown Item';
+
+    // Convert snake_case to Title Case
+    return itemId
+        .split('_')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+};
+
+// Friendly category labels
+const categoryNames = {
+    seed_stock: '🌱 Seeds',
+    gear_stock: '🛠️ Gear',
+    egg_stock: '🥚 Eggs',
+    cosmetic_stock: '🎨 Cosmetics',
+    eventshop_stock: '🎪 Event Shop'
+};
+
 // Alerts configuration
 const defaultAlerts = {
     seed_stock: ['banana', 'pineapple', 'avocado', 'kiwi', 'bell_pepper', 'prickly_pear', 'loquat', 'feijoa', 'sugar_apple'],
