@@ -18,6 +18,7 @@ class WebSocketManager {
     connect() {
         try {
             const wsUrl = `wss://websocket.joshlei.com/growagarden?user_id=${encodeURIComponent(this.userId)}`;
+            console.log(`🔌 Attempting WebSocket connection to: ${wsUrl}`);
             this.ws = new WebSocket(wsUrl);
 
             this.ws.on('open', () => {
@@ -42,8 +43,8 @@ class WebSocketManager {
                 if (this.onError) this.onError(error);
             });
 
-            this.ws.on('close', () => {
-                console.log('🔌 WebSocket connection closed.');
+            this.ws.on('close', (code, reason) => {
+                console.log(`🔌 WebSocket connection closed. Code: ${code}, Reason: ${reason}`);
                 this.isConnected = false;
                 if (this.onDisconnect) this.onDisconnect();
                 this.attemptReconnect();
@@ -113,6 +114,16 @@ class WebSocketManager {
 
     isConnectionActive() {
         return this.isConnected && this.ws && this.ws.readyState === WebSocket.OPEN;
+    }
+
+    getDetailedStatus() {
+        return {
+            isConnected: this.isConnected,
+            hasWebSocket: !!this.ws,
+            readyState: this.ws ? this.ws.readyState : null,
+            reconnectAttempts: this.reconnectAttempts,
+            lastStockData: !!this.lastStockData
+        };
     }
 
     getLastStockData() {

@@ -141,7 +141,14 @@ const initializeApp = async () => {
         };
 
         // Start WebSocket connection
+        console.log('🔌 Initializing WebSocket connection...');
         websocketManager.connect();
+
+        // Check WebSocket status after a short delay
+        setTimeout(() => {
+            const wsDetails = websocketManager.getDetailedStatus();
+            console.log('🔍 WebSocket status after initialization:', wsDetails);
+        }, 3000);
 
         // Schedule periodic checks as backup
         scheduleNextCheck();
@@ -474,13 +481,39 @@ const handleStatusCommand = async (senderId) => {
 
         updateRateLimits(senderId, rateLimitConfig);
 
-        const wsStatus = websocketManager.isConnectionActive() ? '🟢 Active' : '🔴 Inactive';
+        // Get detailed WebSocket status
+        const wsActive = websocketManager.isConnectionActive();
+        const wsDetails = websocketManager.getDetailedStatus();
         const subscriberCount = stockManager.subscribers.size;
+        const lastStockData = websocketManager.getLastStockData();
+
+        // Determine WebSocket status with more detail
+        let wsStatus;
+        if (wsActive) {
+            wsStatus = '🟢 Active';
+        } else if (wsDetails.isConnected) {
+            wsStatus = '🟡 Connected but not ready';
+        } else if (wsDetails.hasWebSocket) {
+            wsStatus = '🔴 Disconnected';
+        } else {
+            wsStatus = '🔴 Not initialized';
+        }
+
+        // Ready state mapping
+        const readyStateMap = {
+            0: 'CONNECTING',
+            1: 'OPEN',
+            2: 'CLOSING',
+            3: 'CLOSED'
+        };
 
         const message = `📊 Bot Status\n\n` +
             `WebSocket: ${wsStatus}\n` +
+            `Connection State: ${wsDetails.isConnected ? 'Connected' : 'Disconnected'}\n` +
+            `Ready State: ${wsDetails.readyState !== null ? readyStateMap[wsDetails.readyState] : 'No WebSocket'}\n` +
+            `Reconnect Attempts: ${wsDetails.reconnectAttempts}\n` +
             `Subscribers: ${subscriberCount}\n` +
-            `Last Update: ${websocketManager.getLastStockData() ? 'Available' : 'None'}`;
+            `Last Update: ${lastStockData ? 'Available' : 'None'}`;
 
         await sendMessage(senderId, message);
 
